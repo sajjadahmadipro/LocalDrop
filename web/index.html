@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#eef2f3">
+<meta name="format-detection" content="telephone=no">
+<title>LocalDrop</title>
+<meta name="description" content="Send files between devices on your own Wi-Fi network.">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body class="booting">
+
+<noscript>
+  <div class="noscript">LocalDrop needs JavaScript enabled in this browser.</div>
+</noscript>
+
+<!-- ==================== booting / unreachable ==================== -->
+<div id="boot" class="screen" role="dialog" aria-labelledby="boot-title">
+  <div class="boot-card">
+    <span class="brandmark" aria-hidden="true">
+      <svg viewBox="0 0 40 40" width="48" height="48"><circle cx="20" cy="20" r="19" fill="#0c6b62"/><path d="M20 10.5v13M14.5 18.5 20 24l5.5-5.5" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 29h16" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/></svg>
+    </span>
+    <h1 id="boot-title">LocalDrop</h1>
+    <p class="muted" id="boot-msg">Connecting to LocalDrop&hellip;</p>
+    <div class="spinner" id="boot-spinner" aria-hidden="true"></div>
+    <div id="boot-error" class="boot-error hidden">
+      <p id="boot-error-text">LocalDrop is not answering on this address.</p>
+      <button type="button" class="btn btn-primary" id="boot-retry">Try again</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== pairing ==================== -->
+<div id="pair" class="screen hidden">
+  <div class="pair-card">
+    <span class="brandmark" aria-hidden="true">
+      <svg viewBox="0 0 40 40" width="44" height="44"><circle cx="20" cy="20" r="19" fill="#0c6b62"/><path d="M20 10.5v13M14.5 18.5 20 24l5.5-5.5" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 29h16" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/></svg>
+    </span>
+    <h1>Pair with LocalDrop</h1>
+    <p class="muted">Type the 6-digit code shown on the computer running LocalDrop.</p>
+    <form id="pair-form" autocomplete="off">
+      <label class="pin-label" for="pin">Pairing code</label>
+      <input id="pin" class="pin-input" type="text" inputmode="numeric" maxlength="6"
+             placeholder="000000" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <label class="field">
+        <span>This device is called</span>
+        <input id="device-name" type="text" maxlength="40" placeholder="iPad"
+               autocapitalize="off" autocorrect="off" spellcheck="false">
+      </label>
+      <button type="submit" class="btn btn-primary btn-big btn-block" id="pair-go">Connect</button>
+    </form>
+    <p class="pair-error hidden" id="pair-error" role="alert"></p>
+    <p class="hint hidden" id="pair-nostore">This browser will not let LocalDrop remember
+      it, which is what Safari does in Private browsing. You will have to type the code
+      again after every visit.</p>
+    <p class="hint">LocalDrop stays inside your Wi-Fi network &mdash; no internet, no accounts, no uploads elsewhere.</p>
+  </div>
+</div>
+
+<!-- ==================== main app ==================== -->
+<div id="app" class="screen hidden">
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brandmark" aria-hidden="true">
+          <svg viewBox="0 0 40 40" width="28" height="28"><circle cx="20" cy="20" r="19" fill="#0c6b62"/><path d="M20 10.5v13M14.5 18.5 20 24l5.5-5.5" fill="none" stroke="#fff" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 29h16" stroke="#fff" stroke-width="2.8" stroke-linecap="round"/></svg>
+        </span>
+        <span class="brand-name">LocalDrop</span>
+      </div>
+      <div class="topbar-right">
+        <span class="status-pill" id="net-pill"><i class="dot dot-off" id="net-dot"></i><span id="net-text">Checking</span></span>
+        <button type="button" class="icon-btn" id="btn-qr" title="Show the network address and pairing code" aria-label="Show the network address and pairing code">
+          <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1.6"/><rect x="14" y="3.5" width="6.5" height="6.5" rx="1.6"/><rect x="3.5" y="14" width="6.5" height="6.5" rx="1.6"/><path d="M14 14h2.6v2.6H14zM17.9 17.9h2.6v2.6h-2.6z"/></svg>
+        </button>
+        <button type="button" class="icon-btn" id="btn-theme" title="Switch appearance" aria-label="Switch appearance">
+          <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg>
+        </button>
+        <button type="button" class="icon-btn hidden" id="btn-settings" title="LocalDrop settings" aria-label="LocalDrop settings">
+          <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div class="rail">
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Devices</h2>
+          <span class="panel-sub" id="devices-sub"></span>
+        </div>
+        <div class="devices" id="devices"></div>
+        <p class="empty" id="devices-empty">Only this computer is connected. Open the address below in another browser and enter the pairing code.</p>
+      </section>
+
+      <section class="panel" id="connect-panel">
+        <div class="panel-head"><h2>Connect a device</h2></div>
+        <span class="address-label">On this network</span>
+        <code class="address-value" id="address-value">&hellip;</code>
+        <span class="address-note" id="address-note"></span>
+        <button type="button" class="btn btn-soft btn-block connect-qr-btn" id="btn-qr-open">Show QR &amp; pairing code</button>
+      </section>
+
+    </div>
+    <div class="main-col">
+
+      <section class="panel" id="send-panel">
+        <div class="panel-head">
+          <h2>Share files</h2>
+          <span class="panel-sub" id="target-sub">Choose a device first</span>
+        </div>
+        <div class="drop" id="drop">
+          <div class="drop-icon" aria-hidden="true">
+            <svg viewBox="0 0 48 48" width="42" height="42" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M24 8v20M16 21l8 8 8-8"/><path d="M10 34v4a2 2 0 0 0 2 2h24a2 2 0 0 0 2-2v-4"/></svg>
+          </div>
+          <p class="drop-title" id="drop-title">Drop files to share</p>
+          <p class="drop-sub" id="drop-sub">Drag and drop files here, or browse your device.</p>
+          <label class="btn btn-soft btn-big file-btn" id="file-btn">
+            <span>Browse files</span>
+            <input type="file" id="file-input" multiple>
+          </label>
+          <p class="drop-hint" id="drop-hint"></p>
+        </div>
+        <div class="picked hidden" id="picked"></div>
+        <div class="picked-actions hidden" id="picked-actions">
+          <button type="button" class="btn btn-primary btn-big" id="send-picked">Send</button>
+          <button type="button" class="btn btn-ghost" id="clear-picked">Remove</button>
+          <span class="picked-total" id="picked-total"></span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Transfers</h2>
+          <div class="filters" id="filters">
+            <button type="button" class="chip is-on" data-filter="all">All</button>
+            <button type="button" class="chip" data-filter="active">Active</button>
+            <button type="button" class="chip" data-filter="incoming">Incoming</button>
+            <button type="button" class="chip" data-filter="done">Finished</button>
+          </div>
+          <button type="button" class="text-btn" id="btn-clear">Clear finished</button>
+        </div>
+        <button type="button" class="incoming-review hidden" id="incoming-review">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v10M8 9.5l4 4 4-4"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+          <span id="incoming-count">Incoming file</span>
+          <span class="ir-arrow" aria-hidden="true">Review</span>
+        </button>
+        <div class="queue" id="queue" aria-live="polite"></div>
+        <p class="empty hidden" id="queue-empty">Nothing here yet.</p>
+      </section>
+
+      <section class="panel books hidden" id="books-panel">
+        <div class="panel-head"><h2>Open a book on this device</h2></div>
+        <ol class="steps" id="books-steps">
+          <li>Tap <strong>Download</strong> on the transfer below.</li>
+          <li>Wait for Safari to finish and show the document.</li>
+          <li>Tap the <strong>Share / Open in Books</strong> button, then choose <strong>Books</strong>.</li>
+        </ol>
+        <p class="hint" id="books-hint">EPUB and PDF arrive ready for Books. Other formats open in whichever app can handle them &mdash; that choice belongs to the device, not to LocalDrop.</p>
+      </section>
+
+      <footer class="foot">
+        <span id="foot-status">&hellip;</span>
+        <span class="foot-sep">&middot;</span>
+        <span>Files stay on your network</span>
+      </footer>
+
+    </div>
+  </main>
+</div>
+
+<!-- ==================== incoming offer drawer ==================== -->
+<div id="offer-backdrop" class="drawer-backdrop"></div>
+<div id="offer-sheet" class="drawer" role="dialog" aria-label="Incoming file" aria-modal="true">
+  <div class="drawer-card">
+    <div class="drawer-grip" aria-hidden="true"></div>
+    <div class="offer-head">
+      <span class="offer-eyebrow">Incoming file</span>
+      <span class="offer-count" id="offer-count"></span>
+    </div>
+    <div class="offer-file">
+      <span class="offer-ico" id="offer-ico" aria-hidden="true"></span>
+      <span class="offer-name" id="offer-name"></span>
+      <span class="offer-meta" id="offer-meta"></span>
+    </div>
+    <div class="offer-actions">
+      <button type="button" class="btn btn-primary btn-big btn-accept" id="offer-accept">Accept</button>
+      <button type="button" class="btn btn-ghost btn-big btn-reject" id="offer-reject">Decline</button>
+    </div>
+    <button type="button" class="text-btn offer-later" id="offer-later">Decide later</button>
+  </div>
+</div>
+
+<!-- ==================== QR / address sheet ==================== -->
+<div id="qr-sheet" class="sheet hidden" role="dialog" aria-label="Connect a device">
+  <div class="sheet-card">
+    <div class="sheet-head">
+      <h2>Connect a device</h2>
+      <button type="button" class="icon-btn" data-close="qr-sheet" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="qr" id="qr-box"></div>
+    <p class="qr-url" id="qr-url">&hellip;</p>
+    <p class="qr-code" id="qr-code">Pairing code <strong id="qr-pin">&bull;&bull;&bull;&bull;&bull;&bull;</strong></p>
+    <button type="button" class="btn btn-ghost btn-block" data-close="qr-sheet">Done</button>
+  </div>
+</div>
+
+<!-- ==================== settings sheet (this computer only) ==================== -->
+<div id="settings-sheet" class="sheet hidden" role="dialog" aria-label="LocalDrop settings">
+  <div class="sheet-card sheet-wide">
+    <div class="sheet-head">
+      <h2>LocalDrop settings</h2>
+      <button type="button" class="icon-btn" data-close="settings-sheet" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+
+    <div class="setting">
+      <label for="set-chunk">Chunk size</label>
+      <select id="set-chunk">
+        <option value="262144">256 KB &mdash; flakiest Wi-Fi</option>
+        <option value="524288">512 KB</option>
+        <option value="1048576">1 MB &mdash; recommended for iPad</option>
+        <option value="2097152">2 MB</option>
+        <option value="4194304">4 MB &mdash; fast laptops</option>
+      </select>
+      <span class="setting-note">Smaller chunks recover faster when a connection drops.</span>
+    </div>
+
+    <div class="setting">
+      <label for="set-poll">Refresh rate</label>
+      <select id="set-poll">
+        <option value="1500">Snappy (1.5 s)</option>
+        <option value="2500">Balanced (2.5 s)</option>
+        <option value="5000">Gentle (5 s)</option>
+      </select>
+      <span class="setting-note">How often browsers ask the server for updates.</span>
+    </div>
+
+    <div class="setting">
+      <label for="set-timeout">Device is offline after</label>
+      <select id="set-timeout">
+        <option value="15">15 seconds</option>
+        <option value="30">30 seconds</option>
+        <option value="60">1 minute</option>
+      </select>
+      <span class="setting-note">Longer is kinder to a sleeping iPad; shorter hides stale devices sooner.</span>
+    </div>
+
+    <div class="setting setting-row">
+      <label class="check"><input type="checkbox" id="set-autoaccept"> Accept incoming files automatically</label>
+      <span class="setting-note">Off means every transfer needs a tap on the receiving device.</span>
+    </div>
+
+    <div class="setting setting-row">
+      <label class="check"><input type="checkbox" id="set-startup"> Start LocalDrop when Windows signs in</label>
+      <span class="setting-note">The desktop launcher writes the sign-in entry; this switch mirrors it.</span>
+    </div>
+
+    <div class="setting">
+      <label for="set-limit">Refuse uploads larger than (MB, 0 = no limit)</label>
+      <input type="text" id="set-limit" class="text-input" inputmode="numeric" placeholder="0">
+    </div>
+
+    <div class="setting">
+      <label>Current pairing code</label>
+      <p class="pin-readout" id="set-pin">&mdash;</p>
+      <span class="setting-note">New devices type this once. Changing it does not disconnect devices that already paired.</span>
+    </div>
+
+    <div class="settings-actions">
+      <button type="button" class="btn btn-primary" id="set-save">Save settings</button>
+      <button type="button" class="btn btn-ghost" id="set-rotate">New pairing code</button>
+      <button type="button" class="btn btn-ghost" id="set-folder">Open received folder</button>
+      <button type="button" class="btn btn-danger" id="set-clear">Clear finished history</button>
+    </div>
+    <p class="pair-error hidden" id="set-error" role="alert"></p>
+
+    <dl class="paths">
+      <dt>Received files</dt><dd id="path-incoming">&hellip;</dd>
+      <dt>Incomplete data</dt><dd id="path-temp">&hellip;</dd>
+      <dt>Database</dt><dd id="path-db">&hellip;</dd>
+      <dt>Log</dt><dd id="path-log">&hellip;</dd>
+    </dl>
+    <p class="hint">Firewall: use the launcher&rsquo;s <em>Allow on this network</em> button if devices cannot connect. Incomplete transfers are never deleted on their own &mdash; clear them yourself.</p>
+    <p class="hint" id="settings-stats"></p>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>
