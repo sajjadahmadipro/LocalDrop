@@ -1,0 +1,31 @@
+# Runtime data: received files, interrupted partials, database, config, log.
+# Never commit this. It is other people's files.
+/data/
+/browser-test/
+/.browser-test/
+
+# Throwaway probes used while developing.
+/.scratch/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+/build/
+/dist/
+/venv/
+/.venv/
+/env/
+
+# LocalDrop scratch
+*.log
+*.db
+*.db-wal
+*.db-shm
+localdrop.config.json
+
+# Windows / editor
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

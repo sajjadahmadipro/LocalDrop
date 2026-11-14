@@ -1,0 +1,15 @@
+# LocalDrop has no third-party dependencies.
+#
+# The server, the launcher, the QR codes, the database and the tests all use the
+# Python standard library only (http/socketserver, sqlite3, hashlib, secrets,
+# hmac, ctypes, winreg, tkinter, unittest). That is deliberate: a file-transfer
+# tool should not need a package index, a virtualenv or a build step to run, and
+# nothing installed from outside can quietly start talking to the network.
+#
+# Requirement: Python 3.8 or newer, with "tcl/tk and IDLE" included (that is the
+# default on Windows) if you want the launcher window.
+# Check with:  python --version
+# tk is missing? Re-run the Python installer, Modify > tick "tcl/tk and IDLE".
+#
+# This file exists so that "pip install -r requirements.txt" works and says
+# "nothing to do" rather than looking like a broken install.
