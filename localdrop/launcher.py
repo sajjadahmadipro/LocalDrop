@@ -7,6 +7,9 @@ firewall guidance and the log.
 
 Standard library only. tkinter ships with the python.org Windows installer; if
 it is missing, run the server from a terminal with `python -m localdrop`.
+
+The window opts into Windows DPI awareness before Tk starts: without it Windows
+bitmap-stretches the whole window, which is what made every label look soft.
 """
 
 import os
@@ -28,25 +31,60 @@ from localdrop.config import Config
 from localdrop.server import LocalDropServer
 
 VERSION = "1.0"
-QR_SIDE = 188
 LOG_LINES = 250
 
-# "still water" palette — the same tokens the browser wears (web/app.css), so the
-# window and the page read as one product. Deep teal on cool porcelain.
-PAPER = "#eef2f3"        # window background
-CARD = "#ffffff"         # panel surface
-INK = "#102a2c"          # primary text
-MUTED = "#5f7477"        # secondary text
-FAINT = "#8a9a9c"        # captions, eyebrows
-LINE = "#dce6e7"         # hairline borders
-PRIMARY = "#0c6b62"      # deep teal accent
-PRIMARY_DOWN = "#095a52"  # pressed primary
-SOFT = "#e0f0ee"         # tinted secondary surface
-SOFT_DOWN = "#d2e9e6"    # pressed secondary
-NEUTRAL = "#e7edee"      # stopped pill / quiet chip
-FIELD = "#f6f9f9"        # log + entry inset
-OK = "#1a7f4e"           # success
-BAD = "#c0392b"          # error
+# The window wears the same tokens as the browser (web/app.css): a dark navy
+# rail beside the porcelain page, deep blue accents, light-blue signals.
+PAPER = "#eef4f9"          # main background
+CARD = "#ffffff"           # panel surface
+INK = "#1b262c"            # primary text
+MUTED = "#5a6b76"          # secondary text
+FAINT = "#8ca3b3"          # captions
+LINE = "#d3e2ee"           # hairline borders
+PRIMARY = "#0f4c75"        # deep blue accent
+PRIMARY_DOWN = "#0c3e60"   # pressed primary
+SOFT = "#bbe1fa"           # light-blue signal surface
+SOFT_DOWN = "#a9d6f5"      # pressed signal surface
+NEUTRAL = "#e6eef4"        # quiet button surface
+NEUTRAL_DOWN = "#dbe7f0"   # pressed quiet surface
+FIELD = "#f6f9f9"          # entry + log inset
+OK = "#1a7f4e"             # success
+BAD = "#c0392b"            # error
+
+# The rail (left sidebar) uses the dark theme tokens.
+RAIL_BG = "#10181e"        # rail background
+RAIL_CARD = "#1e2e38"      # rail button surface
+RAIL_CARD_DOWN = "#274050" # pressed rail button
+RAIL_LINE = "#33475a"      # rail hairline
+RAIL_INK = "#e8f1f8"       # rail primary text
+RAIL_MUTED = "#8ca3b3"     # rail secondary text
+RAIL_FAINT = "#5f7480"     # rail captions
+
+
+def _enable_dpi_awareness():
+    """Ask Windows to stop bitmap-stretching this process. Must run before the
+    first window exists; per-monitor with graceful fallbacks to older calls."""
+    if os.name != "nt":
+        return
+    import ctypes
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)   # per-monitor DPI aware
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
+def _display_scale():
+    """The system display scale as a float (1.0, 1.25, 1.5, ...)."""
+    if os.name != "nt":
+        return 1.0
+    import ctypes
+    try:
+        return max(1.0, ctypes.windll.shcore.GetScaleFactorForDevice(0) / 100.0)
+    except Exception:
+        return 1.0
 
 
 class Engine(object):
@@ -147,194 +185,233 @@ class Launcher(object):
         self.shown_addresses = None
         self.shown_paths = None
 
+        self.s = _display_scale()
+        try:
+            # Point-sized fonts multiply by Tk's scaling: tell it the real DPI so
+            # every text renders at its true size instead of being guessed at 96.
+            root.tk.call("tk", "scaling", 96.0 * self.s / 72.0)
+        except Exception:
+            pass
+
         root.title("LocalDrop %s" % VERSION)
-        # Sizing to content makes an 820px-tall column of cards; the log takes up
-        # the slack instead, so the window fits a laptop screen at any scaling.
-        root.geometry("760x680")
-        root.minsize(620, 560)
+        root.geometry("%dx%d" % (self.px(940), self.px(680)))
+        root.minsize(self.px(780), self.px(580))
         root.configure(bg=PAPER)
-        root.columnconfigure(0, weight=1)
-        root.rowconfigure(1, weight=1)
-        self.icon = app_icon()
+        root.columnconfigure(1, weight=1)
+        root.rowconfigure(0, weight=1)
+        self.icon = app_icon(self.px(34))
         if self.icon is not None:
             root.iconphoto(True, self.icon)
 
         self.family = tkfont.nametofont("TkDefaultFont").actual("family")
+        self.f_title = tkfont.Font(family=self.family, size=17, weight="bold")
+        self.f_hero = tkfont.Font(family=self.family, size=16, weight="bold")
+        self.f_section = tkfont.Font(family=self.family, size=11, weight="bold")
+        self.f_pill = tkfont.Font(family=self.family, size=9, weight="bold")
         self.ui = tkfont.Font(family=self.family, size=10)
         self.small = tkfont.Font(family=self.family, size=9)
         self.tiny = tkfont.Font(family=self.family, size=8)
-        self.mono = tkfont.nametofont("TkFixedFont").copy()
-        try:
-            self.mono.configure(family="Consolas", size=10)
-        except tk.TclError:
-            pass
-        self.mono_small = self.mono.copy()
-        self.mono_small.configure(size=9)
+        self.btn_font = tkfont.Font(family=self.family, size=10, weight="bold")
+        self.small_btn = tkfont.Font(family=self.family, size=9, weight="bold")
+        mono_family = "Consolas"
+        self.mono = tkfont.Font(family=mono_family, size=10)
+        self.mono_small = tkfont.Font(family=mono_family, size=9)
+        self.pin_font = tkfont.Font(family=mono_family, size=17, weight="bold")
 
         self._build()
         root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.tick()
 
+    def px(self, value):
+        return int(round(value * self.s))
+
     # -- layout --------------------------------------------------------
     def _build(self):
-        head = tk.Frame(self.root, bg=PAPER)
-        head.grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 8))
-        head.columnconfigure(0, weight=1)
-        brand = tk.Frame(head, bg=PAPER)
-        brand.grid(row=0, column=0, sticky="w")
-        self.brand_img = app_icon(30)
-        if self.brand_img is not None:
-            tk.Label(brand, image=self.brand_img, bg=PAPER).pack(side="left", padx=(0, 10))
-        tk.Label(brand, text="LocalDrop", bg=PAPER, fg=INK,
-                 font=(self.family, 18, "bold")).pack(side="left")
-        self.lamp = tk.Label(head, text="Stopped", bg=NEUTRAL, fg=MUTED,
-                             font=(self.family, 10, "bold"), padx=13, pady=5)
-        self.lamp.grid(row=0, column=1, sticky="e")
-        self.hint = tk.Label(head, text="", bg=PAPER, fg=MUTED, font=self.ui,
-                             anchor="w", justify="left", wraplength=560)
-        self.hint.grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        rail = tk.Frame(self.root, bg=RAIL_BG, width=self.px(250))
+        rail.grid(row=0, column=0, sticky="ns")
+        rail.pack_propagate(False)
+        self._build_rail(rail)
 
-        body = tk.Frame(self.root, bg=PAPER)
-        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(2, 16))
-        body.columnconfigure(0, weight=1)
-        body.columnconfigure(1, weight=2)
-        body.rowconfigure(1, weight=1)
+        main = tk.Frame(self.root, bg=PAPER)
+        main.grid(row=0, column=1, sticky="nsew")
+        main.columnconfigure(0, weight=1)
+        main.rowconfigure(1, weight=1)
+        self._build_main(main)
 
-        left = tk.Frame(body, bg=PAPER)
-        left.grid(row=0, column=0, sticky="nw", padx=(0, 14))
-        right = tk.Frame(body, bg=PAPER)
-        right.grid(row=0, column=1, sticky="nsew")
-        right.columnconfigure(0, weight=1)
+    def _build_rail(self, rail):
+        pad = dict(padx=self.px(18))
+        head = tk.Frame(rail, bg=RAIL_BG)
+        head.pack(fill="x", pady=(self.px(20), 0), **pad)
+        brand_img = app_icon(self.px(38), bg=SOFT, glyph=INK)
+        if brand_img is not None:
+            self._rail_icon = brand_img
+            tk.Label(head, image=brand_img, bg=RAIL_BG).pack(side="left",
+                                                             padx=(0, self.px(11)))
+        name_box = tk.Frame(head, bg=RAIL_BG)
+        name_box.pack(side="left")
+        tk.Label(name_box, text="LocalDrop", bg=RAIL_BG, fg=RAIL_INK,
+                 font=self.f_title).pack(anchor="w")
+        tk.Label(name_box, text="Local network file sharing", bg=RAIL_BG,
+                 fg=RAIL_FAINT, font=self.tiny).pack(anchor="w")
 
-        self._build_connect(left)
-        self._build_controls(right)
-        self._build_paths(right)
-        self._build_log(body)
+        self.lamp = tk.Label(rail, text="\u25cf  Stopped", bg=RAIL_CARD,
+                             fg=RAIL_MUTED, font=self.f_pill,
+                             padx=self.px(12), pady=self.px(6), anchor="w")
+        self.lamp.pack(fill="x", pady=(self.px(18), self.px(10)), **pad)
 
-    def _card(self, parent, title, row, columnspan=1):
-        frame = tk.Frame(parent, bg=CARD, highlightbackground=LINE,
-                         highlightthickness=1)
-        frame.grid(row=row, column=0, columnspan=columnspan, sticky="nsew", pady=(0, 12))
-        inner = tk.Frame(frame, bg=CARD, padx=14, pady=12)
-        inner.grid(row=0, column=0, sticky="nsew")
-        frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(0, weight=1)
-        inner.columnconfigure(0, weight=1)
-        tk.Label(inner, text=title.upper(), bg=CARD, fg=MUTED,
-                 font=(self.family, 8, "bold")).grid(row=0, column=0, sticky="w",
-                                                     pady=(0, 7))
-        self.row = 1
-        self.card = inner
-        return inner
+        self.start_btn = self._rail_button(rail, "Start LocalDrop", self.on_start,
+                                           "primary")
+        self.stop_btn = self._rail_button(rail, "Stop", self.on_stop, "plain")
+        self._rail_button(rail, "Open in browser", self.on_open_page, "plain")
+        self._rail_button(rail, "Received folder", self.on_open_folder, "plain")
 
-    def _next_row(self):
-        self.row += 1
-        return self.row
-
-    def _build_connect(self, parent):
-        card = self._card(parent, "Open on your devices", 0)
-        self.addr_frame = tk.Frame(card, bg=CARD)
-        self.addr_frame.grid(row=self._next_row(), column=0, sticky="w")
-
-        qr_box = tk.Frame(card, bg=CARD)
-        qr_box.grid(row=self._next_row(), column=0, sticky="w", pady=(12, 0))
-        self.qr_canvas = tk.Canvas(qr_box, width=QR_SIDE, height=QR_SIDE, bg=CARD,
-                                   highlightthickness=1, highlightbackground=LINE)
-        self.qr_canvas.pack()
-        tk.Label(qr_box, text="Scan it with the iPad camera", bg=CARD,
-                 fg=FAINT, font=self.small).pack(anchor="w", pady=(5, 0))
-
-        pin_row = tk.Frame(card, bg=CARD)
-        pin_row.grid(row=self._next_row(), column=0, sticky="w", pady=(12, 0))
-        tk.Label(pin_row, text="Pairing code", bg=CARD, fg=MUTED,
-                 font=self.ui).pack(side="left")
-        self.pin_value = tk.Label(pin_row, text="------", bg=CARD, fg=PRIMARY,
-                                  font=(self.mono.actual("family"), 15, "bold"))
-        self.pin_value.pack(side="left", padx=9)
-        tk.Button(pin_row, text="New code", command=self.on_rotate, relief="flat",
-                  bg=SOFT, fg=INK, font=self.small, padx=10, pady=4,
-                  activebackground=SOFT_DOWN, activeforeground=INK).pack(side="left")
-
-    def _make_button(self, parent, text, command, primary=False):
-        return tk.Button(parent, text=text, command=command, relief="flat", pady=7,
-                         font=(self.family, 10, "bold"), padx=11,
-                         bg=PRIMARY if primary else SOFT,
-                         fg="#ffffff" if primary else INK,
-                         activebackground=PRIMARY_DOWN if primary else SOFT_DOWN,
-                         activeforeground="#ffffff" if primary else INK,
-                         disabledforeground=FAINT)
-
-    def _button(self, parent, text, command, primary=False):
-        btn = self._make_button(parent, text, command, primary)
-        btn.grid(row=self._next_row(), column=0, sticky="we", pady=(0, 6))
-        return btn
-
-    def _button_row(self, parent, specs):
-        """Two buttons sharing one line, which keeps the window laptop-height."""
-        row = tk.Frame(parent, bg=CARD)
-        row.grid(row=self._next_row(), column=0, sticky="we", pady=(0, 6))
-        buttons = []
-        for index, (text, command, primary) in enumerate(specs):
-            btn = self._make_button(row, text, command, primary)
-            btn.pack(side="left", fill="x", expand=True, padx=(0, 6) if index == 0 else 0)
-            buttons.append(btn)
-        return buttons
-
-    def _build_controls(self, parent):
-        card = self._card(parent, "LocalDrop on this PC", 0)
-        self.start_btn, self.stop_btn = self._button_row(
-            card, [("Start LocalDrop", self.on_start, True), ("Stop", self.on_stop, False)])
-        self._button_row(card, [("Open in browser", self.on_open_page, False),
-                                ("Received folder", self.on_open_folder, False)])
-
-        row = tk.Frame(card, bg=CARD)
-        row.grid(row=self._next_row(), column=0, sticky="w", pady=(4, 0))
         self.startup_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(row, text="Start LocalDrop when Windows signs in",
+        tk.Checkbutton(rail, text="Start when Windows signs in",
                        variable=self.startup_var, command=self.on_startup_toggle,
-                       bg=CARD, fg=INK, activebackground=CARD, activeforeground=INK,
-                       selectcolor=CARD, font=self.ui).pack(side="left")
+                       bg=RAIL_BG, fg=RAIL_MUTED, activebackground=RAIL_BG,
+                       activeforeground=RAIL_INK, selectcolor=RAIL_CARD,
+                       font=self.small, relief="flat", highlightthickness=0,
+                       borderwidth=0).pack(anchor="w", pady=(self.px(10), 0), **pad)
 
-        fw = tk.Frame(card, bg=CARD)
-        fw.grid(row=self._next_row(), column=0, sticky="w", pady=(10, 0))
-        tk.Button(fw, text="Check firewall", command=self.on_firewall, relief="flat",
-                  bg=SOFT, fg=INK, font=self.small, padx=10, pady=4,
-                  activebackground=SOFT_DOWN, activeforeground=INK).pack(side="left")
-        tk.Button(fw, text="Allow on this network", command=self.on_firewall_allow,
-                  relief="flat", bg=SOFT, fg=INK, font=self.small, padx=10, pady=4,
-                  activebackground=SOFT_DOWN, activeforeground=INK).pack(side="left", padx=(6, 0))
-        self.fw_label = tk.Label(card, text="", bg=CARD, fg=MUTED,
-                                 font=self.small, wraplength=340, justify="left",
-                                 anchor="w")
-        self.fw_label.grid(row=self._next_row(), column=0, sticky="w", pady=(6, 0))
-        tk.Label(card, text="Closing this window stops LocalDrop.", bg=CARD,
-                 fg=FAINT, font=self.tiny).grid(row=self._next_row(), column=0,
-                                                sticky="w", pady=(7, 0))
+        tk.Frame(rail, bg=RAIL_BG).pack(fill="both", expand=True)
 
-    def _build_paths(self, parent):
-        card = self._card(parent, "Storage", 1)
+        paths = tk.Frame(rail, bg=RAIL_BG)
+        paths.pack(fill="x", pady=(0, self.px(6)), **pad)
         self.path_labels = {}
         for label in ("Received", "Partials", "Database", "Log"):
-            row = tk.Frame(card, bg=CARD)
-            row.grid(row=self._next_row(), column=0, sticky="w", pady=1)
-            tk.Label(row, text=label, width=9, anchor="w", bg=CARD,
-                     fg=FAINT, font=self.tiny).pack(side="left")
-            value = tk.Label(row, text="...", anchor="w", bg=CARD, fg=INK,
-                             font=self.mono_small)
+            row = tk.Frame(paths, bg=RAIL_BG)
+            row.pack(anchor="w", pady=0)
+            tk.Label(row, text=label, width=9, anchor="w", bg=RAIL_BG,
+                     fg=RAIL_FAINT, font=self.tiny).pack(side="left")
+            value = tk.Label(row, text="...", anchor="w", bg=RAIL_BG,
+                             fg=RAIL_MUTED, font=self.mono_small)
             value.pack(side="left")
             self.path_labels[label.lower()] = value
 
-    def _build_log(self, parent):
-        card = self._card(parent, "Recent activity", 1, columnspan=2)
-        self.log_text = tk.Text(card, height=5, width=72, bg=FIELD, fg=INK,
-                                font=self.mono, relief="flat", wrap="none", padx=9, pady=7,
+        tk.Label(rail, text="Closing this window stops LocalDrop.", bg=RAIL_BG,
+                 fg=RAIL_FAINT, font=self.tiny).pack(anchor="w",
+                                                     pady=(0, self.px(16)), **pad)
+
+    def _rail_button(self, rail, text, command, kind):
+        primary = kind == "primary"
+        btn = tk.Button(rail, text=text, command=command, relief="flat",
+                        bg=SOFT if primary else RAIL_CARD,
+                        fg=INK if primary else RAIL_INK,
+                        font=self.btn_font, padx=self.px(12), pady=self.px(9),
+                        activebackground=SOFT_DOWN if primary else RAIL_CARD_DOWN,
+                        activeforeground=INK if primary else RAIL_INK,
+                        highlightthickness=0 if primary else 1,
+                        highlightbackground=RAIL_LINE,
+                        disabledforeground="#7fa3ba" if primary else RAIL_FAINT,
+                        cursor="hand2", anchor="center")
+        hover = SOFT_DOWN if primary else RAIL_CARD_DOWN
+        normal = SOFT if primary else RAIL_CARD
+        btn.pack(fill="x", pady=(0, self.px(8)), padx=self.px(18))
+        btn.bind("<Enter>", lambda event: self._paint(btn, hover)
+                 if str(btn["state"]) == "normal" else None)
+        btn.bind("<Leave>", lambda event: self._paint(btn, normal))
+        return btn
+
+    def _build_main(self, main):
+        head = tk.Frame(main, bg=PAPER)
+        head.grid(row=0, column=0, sticky="ew",
+                  padx=self.px(26), pady=(self.px(22), 0))
+        tk.Label(head, text="Share files on your network", bg=PAPER, fg=INK,
+                 font=self.f_hero).pack(anchor="w")
+        self.hint = tk.Label(head, text="", bg=PAPER, fg=MUTED, font=self.small,
+                             anchor="w", justify="left", wraplength=self.px(620))
+        self.hint.pack(anchor="w", pady=(self.px(4), 0))
+
+        hero = tk.Frame(main, bg=PAPER)
+        hero.grid(row=1, column=0, sticky="nsew", padx=self.px(26),
+                  pady=(self.px(14), 0))
+        hero.columnconfigure(1, weight=1)
+        hero.rowconfigure(0, weight=1)
+
+        tile = tk.Frame(hero, bg=CARD, highlightbackground=LINE,
+                        highlightthickness=1)
+        tile.grid(row=0, column=0, sticky="nsew", padx=(0, self.px(20)))
+        qr_side = self.px(268)
+        canvas = tk.Canvas(tile, width=qr_side, height=qr_side, bg=CARD,
+                           highlightthickness=0)
+        canvas.pack(padx=self.px(16), pady=(self.px(16), self.px(6)))
+        self.qr_side = qr_side
+        self.qr_canvas = canvas
+        tk.Label(tile, text="Scan with a phone or tablet camera", bg=CARD,
+                 fg=FAINT, font=self.tiny).pack(pady=(0, self.px(14)))
+
+        side = tk.Frame(hero, bg=PAPER)
+        side.grid(row=0, column=1, sticky="nsew")
+        self._build_side(side)
+
+        activity = tk.Frame(main, bg=CARD, highlightbackground=LINE,
+                            highlightthickness=1)
+        activity.grid(row=2, column=0, sticky="ew",
+                      padx=self.px(26), pady=(self.px(16), self.px(22)))
+        inner = tk.Frame(activity, bg=CARD, padx=self.px(16), pady=self.px(12))
+        inner.pack(fill="both", expand=True)
+        inner.columnconfigure(0, weight=1)
+        inner.rowconfigure(1, weight=1)
+        tk.Label(inner, text="Recent activity", bg=CARD, fg=INK,
+                 font=self.f_section).grid(row=0, column=0, sticky="w",
+                                           pady=(0, self.px(8)))
+        self.log_text = tk.Text(inner, height=5, bg=FIELD, fg=INK,
+                                font=self.mono, relief="flat", wrap="none",
+                                padx=self.px(10), pady=self.px(8),
                                 highlightthickness=1, highlightbackground=LINE,
                                 state="disabled")
-        self.log_text.grid(row=self._next_row(), column=0, sticky="nsew")
-        card.rowconfigure(self.row, weight=1)
+        self.log_text.grid(row=1, column=0, sticky="ew")
         # A disabled Text still needs the wheel, or the older lines are unreachable.
         self.log_text.bind("<MouseWheel>",
                            lambda event: self.log_text.yview_scroll(-1 * int(event.delta / 120), "units"))
+
+    def _build_side(self, side):
+        self.addr_frame = tk.Frame(side, bg=PAPER)
+        self.addr_frame.pack(fill="x")
+
+        tk.Frame(side, bg=LINE, height=1).pack(fill="x", pady=self.px(14))
+
+        pin_row = tk.Frame(side, bg=PAPER)
+        pin_row.pack(fill="x")
+        tk.Label(pin_row, text="Pairing code", bg=PAPER, fg=MUTED,
+                 font=self.ui).pack(side="left")
+        self.pin_value = tk.Label(pin_row, text="\u2014\u2014\u2014\u2014\u2014\u2014",
+                                  bg=PAPER, fg=PRIMARY, font=self.pin_font)
+        self.pin_value.pack(side="left", padx=self.px(10))
+        self._side_button(pin_row, "New code", self.on_rotate).pack(side="right")
+
+        tk.Frame(side, bg=LINE, height=1).pack(fill="x", pady=self.px(14))
+
+        fw_row = tk.Frame(side, bg=PAPER)
+        fw_row.pack(fill="x")
+        tk.Label(fw_row, text="Firewall", bg=PAPER, fg=MUTED,
+                 font=self.ui).pack(side="left")
+        self._side_button(fw_row, "Check", self.on_firewall).pack(
+            side="left", padx=(self.px(12), 0))
+        self._side_button(fw_row, "Allow on this network",
+                          self.on_firewall_allow).pack(side="left",
+                                                       padx=(self.px(8), 0))
+        self.fw_label = tk.Label(side, text="", bg=PAPER, fg=MUTED,
+                                 font=self.small, wraplength=self.px(430),
+                                 justify="left", anchor="w")
+        self.fw_label.pack(anchor="w", pady=(self.px(8), 0))
+
+    def _side_button(self, parent, text, command):
+        btn = tk.Button(parent, text=text, command=command, relief="flat",
+                        bg=PAPER, fg=PRIMARY, font=self.small_btn,
+                        padx=self.px(8), pady=self.px(3),
+                        activebackground=SOFT, activeforeground=PRIMARY,
+                        highlightthickness=0, disabledforeground=FAINT,
+                        cursor="hand2")
+        btn.bind("<Enter>", lambda event: self._paint(btn, SOFT))
+        btn.bind("<Leave>", lambda event: self._paint(btn, PAPER))
+        return btn
+
+    def _paint(self, widget, color):
+        try:
+            widget.configure(background=color)
+        except tk.TclError:
+            pass
 
     # -- actions -------------------------------------------------------
     def set_hint(self, message, bad=False):
@@ -392,8 +469,8 @@ class Launcher(object):
         elif state == "mismatch":
             self._firewall_line(detail, bad=True)
         elif state == "program-blocked":
-            self._firewall_line("Windows is blocking Python itself - a firewall prompt "
-                                "was cancelled once. Run scripts/firewall-open.bat as "
+            self._firewall_line("Windows is blocking LocalDrop itself - a firewall "
+                                "prompt was cancelled once. Run scripts/firewall-open.bat as "
                                 "administrator to remove the block rule.", bad=True)
         elif state == "unknown":
             self._firewall_line("Windows would not say: %s" % first_line(detail), bad=True)
@@ -438,9 +515,8 @@ class Launcher(object):
 
     def refresh(self, force=False, slow=True):
         running = self.engine.running
-        self.lamp.configure(text="Running" if running else "Stopped",
-                            bg=SOFT if running else NEUTRAL,
-                            fg=PRIMARY if running else MUTED)
+        self.lamp.configure(text="\u25cf  Running" if running else "\u25cf  Stopped",
+                            fg=SOFT if running else RAIL_MUTED)
         self.start_btn.configure(state="disabled" if running else "normal")
         self.stop_btn.configure(state="normal" if running else "disabled")
         self._refresh_log()
@@ -449,7 +525,7 @@ class Launcher(object):
 
         config = self.engine.config()
         port = self.engine.port()
-        self.pin_value.configure(text=self.engine.pin() or "------")
+        self.pin_value.configure(text=self.engine.pin() or "\u2014\u2014\u2014\u2014\u2014\u2014")
         addresses = netinfo.lan_addresses() or ["127.0.0.1"]
         paths = (("received", config.incoming), ("partials", config.temp),
                  ("database", config.db_path), ("log", config.log_path))
@@ -460,7 +536,8 @@ class Launcher(object):
         if force or paths != self.shown_paths:
             self.shown_paths = paths
             for key, path in paths:
-                self.path_labels[key].configure(text=shorten(path))
+                # Short room: these live in the narrow rail.
+                self.path_labels[key].configure(text=shorten(path, room=22))
             self.sync_startup_checkbox()
 
         self._draw_qr(running, port, self.shown_addresses or addresses)
@@ -470,29 +547,35 @@ class Launcher(object):
             child.destroy()
         self.addr_vars = []
         rows = [("This PC", "http://127.0.0.1:%d" % port)]
-        rows += [("Network", "http://%s:%d" % (ip, port)) for ip in addresses[:3]]
+        rows += [("Network", "http://%s:%d" % (ip, port)) for ip in addresses[:2]]
         for label, url in rows:
-            row = tk.Frame(self.addr_frame, bg=CARD)
-            row.pack(fill="x", pady=2)
-            tk.Label(row, text=label, width=7, anchor="w", bg=CARD,
+            row = tk.Frame(self.addr_frame, bg=PAPER)
+            row.pack(fill="x", pady=self.px(3))
+            tk.Label(row, text=label, width=8, anchor="w", bg=PAPER,
                      fg=MUTED, font=self.tiny).pack(side="left")
             var = tk.StringVar(value=url)
             self.addr_vars.append(var)
             entry = tk.Entry(row, textvariable=var, font=self.mono,
-                             relief="flat", width=26,
-                             bg=CARD, fg=INK, highlightthickness=1,
-                             highlightbackground=LINE, readonlybackground=CARD,
-                             state="readonly")
-            entry.pack(side="left", padx=(2, 0), ipady=2)
+                             relief="flat", width=28,
+                             bg=FIELD, fg=INK, highlightthickness=1,
+                             highlightbackground=LINE,
+                             readonlybackground=FIELD, state="readonly",
+                             insertbackground=INK)
+            entry.pack(side="left", padx=(2, 0), ipady=self.px(5))
             entry.bind("<Button-1>", lambda event, widget=entry: widget.select_range(0, "end"))
             entry.bind("<Control-c>", lambda event: self.copy(event.widget.get()))
-            tk.Button(row, text="Copy", relief="flat", bg=CARD, fg=PRIMARY,
-                      font=(self.family, 8, "bold"), padx=5,
-                      activebackground=SOFT, activeforeground=PRIMARY,
-                      command=lambda u=url: self.copy(u)).pack(side="left", padx=(5, 0))
+            copy_btn = tk.Button(row, text="Copy", relief="flat", bg=PAPER,
+                                 fg=PRIMARY, font=self.small_btn, padx=self.px(8),
+                                 activebackground=SOFT, activeforeground=PRIMARY,
+                                 cursor="hand2",
+                                 command=lambda u=url: self.copy(u))
+            copy_btn.pack(side="right", padx=(self.px(6), 0))
+            copy_btn.bind("<Enter>", lambda event, w=copy_btn: self._paint(w, SOFT))
+            copy_btn.bind("<Leave>", lambda event, w=copy_btn: self._paint(w, PAPER))
         if not running:
             tk.Label(self.addr_frame, text="They answer once LocalDrop is running.",
-                     bg=CARD, fg=FAINT, font=self.tiny).pack(anchor="w", pady=(3, 0))
+                     bg=PAPER, fg=FAINT, font=self.tiny).pack(anchor="w",
+                                                              pady=(self.px(3), 0))
 
     def copy(self, text):
         self.root.clipboard_clear()
@@ -507,20 +590,25 @@ class Launcher(object):
         canvas = self.qr_canvas
         canvas.delete("all")
         if not url:
-            canvas.create_text(QR_SIDE // 2, QR_SIDE // 2, width=QR_SIDE - 34,
+            canvas.create_text(self.qr_side // 2, self.qr_side // 2,
+                               width=self.qr_side - self.px(34),
                                text="Start LocalDrop\nto get a code", font=self.ui,
                                fill=FAINT)
             return
         try:
             symbol = qr.encode(url, level="M")
         except Exception as exc:
-            canvas.create_text(QR_SIDE // 2, QR_SIDE // 2, width=QR_SIDE - 24,
+            canvas.create_text(self.qr_side // 2, self.qr_side // 2,
+                               width=self.qr_side - self.px(24),
                                text="code failed: %s" % exc, font=self.small,
                                fill=BAD)
             return
-        quiet = 3
-        scale = max(2, QR_SIDE // (symbol.size + quiet * 2))
-        offset = (QR_SIDE - scale * (symbol.size + quiet * 2)) // 2
+        # Four clear modules on every side: cameras refuse to lock onto a
+        # symbol that runs to its own edge.
+        quiet = 4
+        scale = max(3, self.qr_side // (symbol.size + quiet * 2))
+        total = scale * (symbol.size + quiet * 2)
+        offset = (self.qr_side - total) // 2
         for row in range(symbol.size):
             modules = symbol.modules[row]
             col = 0
@@ -551,7 +639,7 @@ class Launcher(object):
         widget.see("end")
 
 
-def app_icon(size=32):
+def app_icon(size=32, bg=PRIMARY, glyph="#ffffff"):
     """The LocalDrop mark, drawn pixel by pixel so no .ico file has to ship."""
     try:
         image = tk.PhotoImage(width=size, height=size)
@@ -568,7 +656,7 @@ def app_icon(size=32):
             stem = 0.44 <= u <= 0.56 and 0.20 <= v <= 0.50
             head = 0.50 <= v <= 0.66 and abs(u - 0.5) <= (0.66 - v) * 0.72
             base = 0.30 <= u <= 0.70 and 0.74 <= v <= 0.81
-            image.put("#ffffff" if (stem or head or base) else PRIMARY,
+            image.put(glyph if (stem or head or base) else bg,
                       to=(x, y, x + 1, y + 1))
     return image
 
@@ -591,6 +679,7 @@ def first_line(text):
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    _enable_dpi_awareness()
     engine = Engine()
     root = tk.Tk()
     window = Launcher(root, engine)
