@@ -116,7 +116,6 @@
     timer: null,
     screen: "boot",
     target: "",
-    filter: "all",
     picked: []
   };
 
@@ -767,6 +766,7 @@
     show($("app"), which === "app");
     document.body.className = document.body.className.replace(/\b(booting|pairing|ready)\b/g, "");
     addClass(document.body, which === "boot" ? "booting" : (which === "pair" ? "pairing" : "ready"));
+    layout();
   }
 
   function lostSession() {
@@ -775,7 +775,7 @@
     delItem(K_DEVICE);
     S.token = "";
     S.device = "";
-    closeOffer();
+    text($("notif-stack"), "");
     screenTo("pair");
     setPairError("LocalDrop does not recognise this browser any more. Enter the pairing code again.");
   }
@@ -952,6 +952,20 @@
     }
   }
 
+  // The desktop shell never scrolls: the transfer list is the only scroll
+  // region. Its top edge is measured from the live position of the Transfers
+  // heading (the drop zone and picked-files block above it change height), and
+  // the send panel lifts to make room for the Books help card when it docks.
+  function layout() {
+    if (S.screen !== "app") { return; }
+    var panel = $("send-panel"), head = $("transfers-head"),
+        scroll = $("queue-scroll"), books = $("books-panel");
+    if (!panel || !head || !scroll) { return; }
+    var booksH = (books && !has(books, "hidden")) ? books.offsetHeight + 12 : 0;
+    panel.style.bottom = booksH + "px";
+    scroll.style.top = (head.offsetTop + head.offsetHeight + 10) + "px";
+  }
+
   function renderAll() {
     defaultTarget();
     renderStatus();
@@ -963,6 +977,7 @@
     renderOffers();
     renderBookHelp();
     renderSettingsButton();
+    layout();
   }
 
   function renderStatus() {
@@ -978,31 +993,20 @@
       text(label, "Connected");
     }
     toggle(pill, "is-off", !S.reachable);
-    var bits = [];
-    if (S.server) {
-      bits.push("LocalDrop " + (S.server.version || ""));
-      bits.push(bytes(countBytes()) + " received");
-      var active = busyCount();
-      if (active) { bits.push(active + " active"); }
+    var meEl = $("me-name");
+    if (meEl) {
+      if (S.me && S.me.name) {
+        meEl.innerHTML = kindIcon(S.me.kind) + "<span>" + esc(S.me.name) + "</span>";
+        show(meEl, true);
+      } else {
+        show(meEl, false);
+      }
     }
-    text($("foot-status"), bits.join(" \u00b7 "));
-  }
-
-  function countBytes() {
-    var n = 0, i;
-    for (i = 0; i < S.transfers.length; i++) {
-      if (S.transfers[i].status === "complete") { n += S.transfers[i].size; }
-    }
-    return n;
   }
 
   function renderAddress() {
     if (!S.server) { return; }
     text($("address-value"), esc(S.server.url || ""));
-    var noteText = isHost()
-      ? "Open this address on the other device, then enter the pairing code."
-      : "You are connected to " + esc((S.server.url || "LocalDrop"));
-    text($("address-note"), noteText);
     text($("qr-url"), esc(S.server.url || ""));
     if (isHost()) {
       if (S.host && S.host.pin) { text($("qr-pin"), esc(S.host.pin)); }
@@ -1025,13 +1029,20 @@
     return null;
   }
 
+  // The host session id differs from the local device id, so "this computer" must be excluded too.
+  function isSelf(d) {
+    return !!d && (d.id === (S.me && S.me.id) || (d.local && isHost()));
+  }
+
   function renderDevices() {
-    var html = "", i, d, shown = 0, online = 0, list = S.devices || [];
+    var searchEl = $("device-search");
+    var q = searchEl ? (searchEl.value || "").toLowerCase().replace(/^\s+|\s+$/g, "") : "";
+    var html = "", i, d, total = 0, list = S.devices || [];
     for (i = 0; i < list.length; i++) {
       d = list[i];
-      if (d.id === (S.me && S.me.id)) { continue; }
-      shown++;
-      if (d.online) { online++; }
+      if (isSelf(d)) { continue; }
+      total++;
+      if (q && String(d.name || "").toLowerCase().indexOf(q) < 0) { continue; }
       var usable = d.online && d.paired;
       html += '<button type="button" class="device' + (S.target === d.id ? " is-on" : "") +
               (usable ? "" : " is-offline") + '" data-device="' + esc(d.id) + '">' +
@@ -1043,8 +1054,15 @@
               "</span></button>";
     }
     text($("devices"), html);
-    show($("devices-empty"), !html);
-    text($("devices-sub"), shown ? (online + " of " + shown + " reachable") : "");
+    var emptyEl = $("devices-empty");
+    if (!html) {
+      text(emptyEl, (total && q)
+        ? "No devices match \u201c" + esc(q) + "\u201d."
+        : "Only this computer is connected. Open the address below in another browser and enter the pairing code.");
+      show(emptyEl, true);
+    } else {
+      show(emptyEl, false);
+    }
   }
 
   function kindLabel(d) {
@@ -1081,9 +1099,9 @@
   }
 
   function defaultTarget() {
-    if (S.target && S.target !== (S.me && S.me.id)) {
-      var d = deviceById(S.target);
-      if (d && d.online) { return; }
+    if (S.target) {
+      var cur = deviceById(S.target);
+      if (cur && cur.online && !isSelf(cur)) { return; }
     }
     S.target = "";
     var i, d;
@@ -1100,7 +1118,7 @@
     }
     for (i = 0; i < S.devices.length; i++) {
       d = S.devices[i];
-      if (d.online && d.id !== (S.me && S.me.id)) { S.target = d.id; return; }
+      if (d.online && !isSelf(d)) { S.target = d.id; return; }
     }
   }
 
@@ -1119,6 +1137,7 @@
     text($("picked-total"), S.picked.length
       ? S.picked.length + " file" + (S.picked.length > 1 ? "s" : "") + " \u00b7 " + bytes(total)
       : "");
+    layout();
   }
 
   function addPicked(list) {
@@ -1188,11 +1207,9 @@
     var out = [], i, t;
     for (i = 0; i < S.transfers.length; i++) {
       t = S.transfers[i];
-      if (S.filter === "active" &&
-          !/^(pending|uploading|paused|interrupted|verifying|downloading|ready)$/.test(t.status)) { continue; }
-      if (S.filter === "incoming" && !(t.for_me && (t.offer === "pending" || t.stage === "download"))) { continue; }
-      if (S.filter === "done" && t.status !== "complete" && t.status !== "canceled" &&
-          t.status !== "rejected") { continue; }
+      // Pending incoming offers live in the notification inbox; accepting one
+      // moves it into this list.
+      if (t.for_me && t.offer === "pending" && t.status !== "rejected" && t.status !== "canceled") { continue; }
       out.push(t);
       if (out.length >= 80) { break; }      // keep the DOM small on an iPad 2
     }
@@ -1227,8 +1244,7 @@
       }
     }
     show($("queue-empty"), rows.length === 0);
-    text($("queue-empty"), S.transfers.length ? "Nothing matches this filter."
-                                              : "Nothing transferring yet. Files you send appear here.");
+    text($("queue-empty"), "Nothing transferring yet. Files you send or receive appear here.");
   }
 
   function rowInner(t) {
@@ -1292,9 +1308,6 @@
       } else if (t.status === "verifying") { /* nothing to press */ }
       else { out += actBtn("pause", t.id, "Pause", "btn btn-small", "pause"); }
       out += actBtn("cancel", t.id, "Cancel", "btn btn-ghost btn-small", "x");
-    }
-    if (t.for_me && t.offer === "pending" && t.status !== "rejected" && t.status !== "canceled") {
-      out += actBtn("review", t.id, "Review", "btn btn-primary btn-small", "inbox");
     }
     if (t.for_me && t.stage === "download" && t.offer !== "pending") {
       if (t.status === "ready") {
@@ -1419,11 +1432,7 @@
     return node;
   }
 
-  /* --------------------------------------------------------- offer drawer */
-  var offerSeen = {};
-  var offerOpen = false;
-  var offerIndex = 0;
-
+  /* ---------------------------------------------------- incoming notifications */
   function pendingOffers() {
     var out = [], i, t;
     for (i = 0; i < S.transfers.length; i++) {
@@ -1435,61 +1444,54 @@
     return out;
   }
 
-  function renderOffers() {
-    var offers = pendingOffers(), i, fresh = false;
-    for (i = 0; i < offers.length; i++) {
-      if (!offerSeen[offers[i].id]) { fresh = true; }
-    }
-    if (offerOpen) {
-      fillOffer();
-      show($("incoming-review"), false);
-      return;
-    }
-    if (offers.length) {
-      show($("incoming-review"), true);
-      text($("incoming-count"), offers.length + " incoming file" +
-           (offers.length > 1 ? "s" : "") + " waiting");
-    } else {
-      show($("incoming-review"), false);
-    }
-    if (fresh && S.screen === "app") { openOffer(); }
-  }
-
-  function openOffer() {
-    var offers = pendingOffers(), i;
-    if (!offers.length) { return; }
-    for (i = 0; i < offers.length; i++) { offerSeen[offers[i].id] = true; }
-    offerIndex = 0;
-    offerOpen = true;
-    fillOffer();
-    addClass($("offer-backdrop"), "is-open");
-    addClass($("offer-sheet"), "is-open");
-    show($("incoming-review"), false);
-  }
-
-  function closeOffer() {
-    offerOpen = false;
-    drop($("offer-backdrop"), "is-open");
-    drop($("offer-sheet"), "is-open");
-    if (S.screen === "app") { renderOffers(); }
-  }
-
-  function fillOffer() {
-    var offers = pendingOffers();
-    if (!offers.length) { closeOffer(); return; }
-    if (offerIndex >= offers.length) { offerIndex = offers.length - 1; }
-    var t = offers[offerIndex];
+  function notifCard(t) {
     var info = fileIcon(t.name);
-    $("offer-ico").innerHTML = info[2];
-    text($("offer-name"), esc(t.name));
-    text($("offer-meta"), bytes(t.size) + " \u00b7 from " + esc(t.source_name || "another device"));
-    text($("offer-count"), offers.length > 1 ? (offerIndex + 1) + " of " + offers.length : "");
-    $("offer-accept").setAttribute("data-tid", t.id);
-    $("offer-reject").setAttribute("data-tid", t.id);
+    return '<div class="notif" data-offer="' + esc(t.id) + '">' +
+      '<div class="notif-top">' +
+        '<span class="notif-ico ' + info[0] + '" aria-hidden="true">' + info[2] + "</span>" +
+        '<span class="notif-heading">' +
+          '<span class="notif-eyebrow">Incoming file</span>' +
+          '<span class="notif-name">' + esc(t.name) + "</span>" +
+          '<span class="notif-meta">' + bytes(t.size) + " \u00b7 from " +
+            esc(t.source_name || "another device") + "</span>" +
+        "</span>" +
+      "</div>" +
+      '<div class="notif-actions">' +
+        '<button type="button" class="btn btn-primary btn-small" data-act="accept" data-tid="' + esc(t.id) + '">' +
+          icon("check", 14) + "Accept</button>" +
+        '<button type="button" class="btn btn-ghost btn-small" data-act="reject" data-tid="' + esc(t.id) + '">' +
+          icon("x", 14) + "Decline</button>" +
+      "</div>" +
+    "</div>";
   }
 
-  function decideOffer(action) {
-    var tid = $("offer-" + (action === "accept" ? "accept" : "reject")).getAttribute("data-tid");
+  function renderOffers() {
+    var stack = $("notif-stack");
+    if (!stack) { return; }
+    var offers = pendingOffers(), keep = {}, i, t, found, child, node, id;
+    for (i = 0; i < offers.length; i++) {
+      t = offers[i];
+      keep[t.id] = 1;
+      found = null; child = stack.firstChild;
+      while (child) {
+        if (child.getAttribute && child.getAttribute("data-offer") === t.id) { found = child; break; }
+        child = child.nextSibling;
+      }
+      if (!found) {
+        node = document.createElement("div");
+        node.innerHTML = notifCard(t);
+        stack.appendChild(node.firstChild);
+      }
+    }
+    var kids = [], k = stack.firstChild;
+    while (k) { kids.push(k); k = k.nextSibling; }
+    for (i = 0; i < kids.length; i++) {
+      id = kids[i].getAttribute ? kids[i].getAttribute("data-offer") : null;
+      if (!id || !keep[id]) { stack.removeChild(kids[i]); }
+    }
+  }
+
+  function decideOffer(action, tid) {
     if (!tid) { return; }
     var row = transferById(tid);
     callAction(tid, action, {}, function () {
@@ -1499,8 +1501,7 @@
       } else {
         note("Declined " + (row ? row.name : "the file"));
       }
-      offerIndex = 0;
-      window.setTimeout(function () { if (offerOpen) { fillOffer(); } }, 350);
+      poll(true);
     });
   }
 
@@ -1594,7 +1595,7 @@
   var toastTimer = null;
   function note(message, bad) {
     var el = $("toast");
-    el.className = "toast" + (bad ? " bad" : "");
+    el.className = "toast" + (bad ? " is-bad" : "");
     el.innerHTML = esc(message);
     show(el, true);
     window.clearTimeout(toastTimer);
@@ -1630,12 +1631,31 @@
     xhr.send(null);
   }
 
+  function copyAddress() {
+    var url = (S.server && S.server.url) || "";
+    if (!url) { note("No address to copy yet.", true); return; }
+    var ta = document.createElement("textarea");
+    ta.value = url;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "absolute";
+    ta.style.left = "-9999px";
+    ta.style.top = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    if (ta.setSelectionRange) { ta.setSelectionRange(0, url.length); }
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    if (ok) { note("Address copied"); }
+    else { note("Copy is not available here. The address is " + url, true); }
+  }
+
   function wire() {
     if ("ontouchstart" in window || navigator.maxTouchPoints > 0) {
       addClass(document.body, "touch");
       addClass($("drop"), "no-drag");
       text($("drop-title"), "Choose files to share");
-      text($("drop-sub"), "Tap the button below, then pick the receiving device.");
+      text($("drop-sub"), "Tap Browse files, then pick the receiving device.");
     }
 
     on($("pair-form"), "submit", function (e) {
@@ -1666,8 +1686,9 @@
     });
 
     on($("btn-theme"), "click", flipTheme);
-    on($("btn-qr"), "click", openQr);
     on($("btn-qr-open"), "click", openQr);
+    on($("address-value"), "click", copyAddress);
+    on($("device-search"), "input", function () { renderDevices(); });
     on($("btn-settings"), "click", openSettings);
     on($("set-save"), "click", saveSettings);
     on($("set-rotate"), "click", function () {
@@ -1702,11 +1723,15 @@
       if (e.target === this) { show(this, false); }
     });
 
-    on($("offer-accept"), "click", function () { decideOffer("accept"); });
-    on($("offer-reject"), "click", function () { decideOffer("reject"); });
-    on($("offer-later"), "click", closeOffer);
-    on($("offer-backdrop"), "click", closeOffer);
-    on($("incoming-review"), "click", openOffer);
+    on($("notif-stack"), "click", function (e) {
+      var el = e.target;
+      while (el && el !== this && !(el.getAttribute && el.getAttribute("data-act"))) {
+        el = el.parentNode;
+      }
+      if (!el || !el.getAttribute) { return; }
+      var act = el.getAttribute("data-act"), tid = el.getAttribute("data-tid");
+      if (tid && (act === "accept" || act === "reject")) { decideOffer(act, tid); }
+    });
 
     on($("file-input"), "change", function () {
       if (this.files && this.files.length) { addPicked(this.files); }
@@ -1758,24 +1783,7 @@
       else if (act === "reselect") { askForFile(tid, row); }
       else if (act === "cancel") { cancelUpload(tid); }
       else if (act === "delete") { callAction(tid, "delete", {}); }
-      else if (act === "review") { openOffer(); }
       else if (act === "folder") { openFolder(tid); }
-    });
-
-    on($("filters"), "click", function (e) {
-      var el = e.target;
-      while (el && el !== this && !(el.getAttribute && el.getAttribute("data-filter"))) {
-        el = el.parentNode;
-      }
-      if (!el || !el.getAttribute) { return; }
-      var f = el.getAttribute("data-filter");
-      if (!f) { return; }
-      S.filter = f;
-      var kids = this.getElementsByTagName("button"), i2;
-      for (i2 = 0; i2 < kids.length; i2++) {
-        toggle(kids[i2], "is-on", kids[i2].getAttribute("data-filter") === f);
-      }
-      renderQueue();
     });
 
     on($("btn-clear"), "click", function () {
@@ -1800,12 +1808,12 @@
       S.reachable = false;
       renderStatus();
     });
+    on(window, "resize", layout);
 
     document.onkeydown = function (e) {
       if (e && (e.keyCode === 27)) {
         show($("qr-sheet"), false);
         show($("settings-sheet"), false);
-        if (offerOpen) { closeOffer(); }
       }
     };
   }
