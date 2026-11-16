@@ -8,6 +8,9 @@ Built to work on **iPad 2 / iOS 9 Safari**, which means plain HTTP, polling and
 files streamed in small chunks, rather than WebRTC, WebSockets or a service
 worker.
 
+- Ships as one portable `LocalDrop.exe` — copy it anywhere, double-click, no
+  Python and no install; grab it from
+  [GitHub Releases](../../releases) (see [Download](#download))
 - Version 1.0.0
 - Python 3.8+ standard library only — see [requirements.txt](requirements.txt)
 - Runs on Windows 10/11; works on macOS and Linux with the console entry point
@@ -16,25 +19,50 @@ worker.
 
 ## Contents
 
-1. [Quick start](#quick-start-windows)
-2. [Pairing a device](#pairing-a-device)
-3. [The launcher window](#the-launcher-window)
-4. [The transfer page](#the-transfer-page)
-5. [Pause, resume, recovery](#pause-resume-and-recovery)
-6. [Compatibility: what was tested and what was not](#compatibility)
-7. [Security model](#security-model)
-8. [Data, config and where files land](#data-and-configuration)
-9. [Windows Firewall](#windows-firewall)
-10. [Start with Windows](#start-with-windows)
-11. [Sending books and PDFs to iBooks](#sending-a-book-or-pdf-to-the-ipad)
-12. [Architecture and API](#architecture)
-13. [Tests](#tests)
-14. [Troubleshooting](#troubleshooting)
-15. [What LocalDrop deliberately does not do](#what-localdrop-does-not-do)
+1. [Download and run the .exe](#download)
+2. [Quick start from source (Windows)](#quick-start-from-source-windows)
+3. [Building the .exe yourself](#building-the-exe-yourself)
+4. [Pairing a device](#pairing-a-device)
+5. [The launcher window](#the-launcher-window)
+6. [The transfer page](#the-transfer-page)
+7. [Pause, resume, recovery](#pause-resume-and-recovery)
+8. [Compatibility](#compatibility)
+9. [Security model](#security-model)
+10. [Data and configuration](#data-and-configuration)
+11. [Windows Firewall](#windows-firewall)
+12. [Start with Windows](#start-with-windows)
+13. [Sending a book or PDF to the iPad](#sending-a-book-or-pdf-to-the-ipad)
+14. [Architecture](#architecture)
+15. [Tests](#tests)
+16. [Troubleshooting](#troubleshooting)
+17. [What LocalDrop deliberately does not do](#what-localdrop-does-not-do)
 
 ---
 
-## Quick start (Windows)
+## Download
+
+Grab `LocalDrop.exe` from the [latest GitHub release](../../releases). One file,
+about 13 MB, nothing else:
+
+1. Copy it wherever you like — Desktop, a USB stick, `D:\Tools`. LocalDrop is
+   portable: it creates its `data/` folder (received files, database, config,
+   log) **next to the exe**, so moving the exe means starting fresh storage.
+2. Double-click it. First run on a new PC shows a blue **SmartScreen "unknown
+   publisher"** warning — click *More info → Run anyway* (unavoidable without a
+   paid code-signing certificate; Windows remembers after the first run).
+3. Press **Start LocalDrop**. Windows asks about the firewall once — allow it,
+   or use the rail's **Allow on this network** button (see
+   [Windows Firewall](#windows-firewall)).
+4. On the phone or tablet, open the **Network** address shown in the window or
+   scan the QR. Type the 6-digit pairing code. Send files.
+
+The dark rail in the window is the PC's control panel: Start/Stop, open the
+page or the received folder, sign-in start, firewall tools, storage paths. The
+browser page is where files move. Closing the window stops LocalDrop.
+
+---
+
+## Quick start from source (Windows)
 
 1. Install Python 3.8 or newer from <https://www.python.org/downloads/>.
    On the first installer screen leave **"Add python.exe to PATH"** ticked, and
@@ -76,6 +104,26 @@ python -m localdrop.launcher             the launcher window
 python -m localdrop.firewall status      is the port open?
 ```
 
+## Building the .exe yourself
+
+The committed `LocalDrop.spec` drives the build, so the exe is reproducible:
+
+```
+pip install pyinstaller
+python -m PyInstaller --noconfirm LocalDrop.spec
+```
+
+`dist/LocalDrop.exe` is the whole app: the tkinter window, the server, the web
+shell and the QR encoder bundled into one file with the brand icon embedded.
+The web folder rides inside the bundle (`web` → bundle root), `winreg` is a
+declared hidden import because it is only imported inside functions, and the
+runtime keeps its storage next to the exe rather than in a temp folder. There
+are no third-party runtime dependencies to freeze — PyInstaller only wraps the
+standard library.
+
+Re-run the same command after any code change; the result always lands at
+`dist/LocalDrop.exe`.
+
 ---
 
 ## Pairing a device
@@ -105,8 +153,11 @@ can be orphaned.
 
 `LocalDrop.bat` / `python -m localdrop.launcher`.
 
-The window wears the same deep-teal "still water" palette as the browser page
-(see [The transfer page](#the-transfer-page)), so the two read as one product.
+The window wears the browser page's own deep-blue palette: a dark navy rail
+holds the brand, the running lamp and the PC controls; a porcelain main area
+leads with a large QR tile, the addresses, the pairing code and the firewall
+tools. Text stays crisp at any Windows display scaling — the window opts into
+per-monitor DPI awareness before Tk starts.
 
 | Part | What it does |
 | --- | --- |
@@ -129,9 +180,9 @@ for in Task Manager. Minimize it instead if you want to keep transferring.
 
 ## The transfer page
 
-The browser page and the launcher share one deep-teal "still water" palette —
-cool porcelain with a deep-teal accent and an aqua signal for live data, plus a
-dark variant behind the theme button. Layout and wording follow a few rules:
+The browser page and the launcher share one palette — cool porcelain with
+deep-blue accents and a light-blue signal for live data, plus a dark variant
+behind the theme button. Layout and wording follow a few rules:
 
 - **One primary action.** The send button names its target (*Send to Ahmadi*),
   and the device list above it is a picker rather than a row of competing
@@ -188,6 +239,7 @@ history is cleared.
 | The last byte arrives | `Verifying` → `Ready` | SHA-256 is computed by streaming the file from disk, then the partial file is moved into `incoming/` with a unique name. |
 | You press **Cancel** | `Canceled` | The partial file is deleted. Explicit cancel is the only thing that deletes partials (apart from **Delete**). |
 | Download to an iPad is interrupted | Tap the link again | `GET .../data` answers `Range`/`206` and sends `Accept-Ranges`, `ETag` and the file's SHA-256 in `X-LocalDrop-Sha256`. |
+| A device-to-device send finishes | `Delivered` | The moment the last byte leaves the server, its staged relay copy is deleted — the server keeps nothing the receiver already has. If the copy is still held open by the download stream (a Windows file lock), a periodic sweep deletes it a moment later. |
 
 ### The honest limit on downloads
 
@@ -221,10 +273,17 @@ files stay on disk (the button says *history*, not *files*).
   `xhr.upload.onprogress` and `File.prototype.slice` (with the
   `webkitSlice` fallback). No WebSockets required — polling is the transport,
   and polling is also how progress and presence travel.
-- No service worker, no IndexedDB requirement. Session identity lives in
-  `localStorage`; when a browser refuses it — Safari Private browsing throws on
-  write — the token falls back to a plain in-memory object, so it is lost on
-  reload. The pairing screen says so instead of pretending nothing happened.
+- The page itself uses no modern APIs: no `fetch`, no `Promise`, no IndexedDB,
+  no WebCrypto. The one addition is a small ES5 service worker (`web/sw.js`)
+  that caches only the fixed app shell so the PC's browser can install
+  LocalDrop as an app; every `/api/*` call and file byte stays network-only,
+  and iOS 9 — which has no service workers at all — simply ignores the file.
+  An Android *install* would need HTTPS, which LocalDrop deliberately does not
+  offer; iOS "Add to Home Screen" works over plain HTTP. Session identity
+  lives in `localStorage`; when a browser refuses it — Safari Private browsing
+  throws on write — the token falls back to a plain in-memory object, so it is
+  lost on reload. The pairing screen says so instead of pretending nothing
+  happened.
 - CSS avoids custom properties, `grid`, `flex`, `filter`, `:has()`, sticky
   stacks and viewport-unit sizing tricks. Layout is float/table/inline-block
   based with `-webkit-` prefixes; themes are a `body.dark` class, not CSS
@@ -237,7 +296,7 @@ files stay on disk (the button says *history*, not *files*).
   to 64 KB for flaky Wi-Fi, because an iPad 2 will not hold a large buffer.
 
 **Tested** — see [Tests](#tests) and [docs/test-matrix.md](docs/test-matrix.md):
-128 automated cases over the protocol, the transfer engine, pairing, presence,
+134 automated cases over the protocol, the transfer engine, pairing, presence,
 byte ranges, QR geometry, firewall reporting and a static audit of everything in
 `web/`; the real
 page driven in a Chromium-based browser, both on the desktop host view and at a
@@ -271,7 +330,7 @@ pairing field, and the actual throughput of an iPad 2's Wi-Fi radio.
 | Who may act | Pairing needs the 6-digit code shown on the PC. Success gives a random 24-byte session token (32 URL-safe characters), stored only as a SHA-256 hash in SQLite; the PIN is hashed too and compared in constant time, so a database copy does not hand out working credentials. |
 | Brute force | Pairing attempts are throttled per address (8 per minute) and the throttle answers `429`. |
 | PC vs phone powers | Only the browser on the PC itself (loopback) gets `role = "host"`. Admin endpoints — `/api/settings`, `/api/pin/rotate`, `/api/server/stop`, `/api/history/clear` — require host role **and** a loopback peer address, so a phone that guessed a URL cannot reconfigure the server. |
-| Whose transfer is whose | Every transfer records its source and destination device id. Chunk, pause, resume, cancel, finalize and accept/reject check the session, with an explicit exception for the host so the PC can always intervene. `GET .../data` is refused for anyone but the destination device or the host. |
+| Whose transfer is whose | Every transfer records its source and destination device id. Chunk, pause, resume, cancel, finalize and accept/reject check the session, with an explicit exception for the host so the PC can always intervene. `GET .../data` is refused for anyone but the destination device, the transfer's own sender (download again), or the PC inbox. The host also **never sees traffic between two other devices** — only the sender and receiver get those rows in their queues. |
 | Filenames | `sanitize_filename()` strips paths, control characters, reserved Windows names and leading dots; `unique_name()` prevents silent overwrite (`report.pdf`, `report (2).pdf`, …). Overwriting is never automatic. |
 | Directory traversal | Written paths are built from server-generated ids only. `contains()` re-checks that a resolved path stays inside the data directory before any write. |
 | Execution | Received files are stored, listed and offered for download. LocalDrop never runs, opens for parsing, imports as a module, or extracts an archive. An uploaded `.exe` is bytes in a folder. |
@@ -397,16 +456,17 @@ normal band.
 
 Off by default; nothing is registered until you tick it.
 
-Where to tick it: launcher window, or the web page's **Settings** sheet on the
-PC. LocalDrop writes one value,
+Where to tick it: the **Start with Windows** box on the launcher's dark rail.
+LocalDrop writes one value,
 
 ```
 HKCU\Software\Microsoft\Windows\CurrentVersion\Run\LocalDrop
 ```
 
-pointing at `pythonw.exe …\localdrop\launcher.py --minimized --start`. That
-signs in with you (not before), opens the launcher minimized, and starts the
-server. Unchecking removes the value. No service, no scheduled task, no admin
+pointing at the launcher — `LocalDrop.exe --minimized --start` for the
+portable exe, `pythonw.exe …\localdrop\launcher.py --minimized --start` when
+run from source. That signs in with you (not before), opens the launcher
+minimized, and starts the server. Unchecking removes the value. No service, no scheduled task, no admin
 rights needed, nothing machine-wide.
 
 Notes:
@@ -471,13 +531,18 @@ web/
   index.html       one page: pairing, devices, queue, settings
   app.css          legacy-safe CSS, light + dark
   app.js           ES5 client: XHR, chunked upload, polling, diffing
+  sw.js            service worker: caches the fixed shell (PWA on the PC)
+  manifest.json    PWA manifest for the PC install
   icon.svg         logo / favicon
-tests/             128 unittest cases: protocol, transfers, security, QR,
+  icon-192.png, icon-512.png, apple-touch-icon.png   install icons
+tests/             134 unittest cases: protocol, transfers, security, QR,
                    firewall reporting, compatibility audit
 docs/test-matrix.md the sixteen scenarios and how each was verified
 LocalDrop.bat          launcher (double-click)
 LocalDrop-console.bat  console server
+LocalDrop.spec         PyInstaller recipe for the portable LocalDrop.exe
 scripts/firewall-open.bat  elevated firewall helper
+scripts/localdrop.ico  exe icon
 requirements.txt       deliberately empty: standard library only
 .gitignore             keeps data/, scratch files and caches out of git
 ```
@@ -506,7 +571,7 @@ A download is the destination device fetching `.../data`.
 | `POST /api/transfers/<id>/pause` \| `resume` \| `cancel` \| `delete` | party | Manual control. `resume` returns the offset to continue from |
 | `POST /api/transfers/<id>/rebind` | source | Re-attach a re-picked `File` after a reload; name+size checked |
 | `POST /api/transfers/<id>/accept` \| `reject` | destination | Answer an offer |
-| `GET/HEAD /api/transfers/<id>/data` | destination, host | The bytes, with `Range`, `ETag`, `X-LocalDrop-Sha256` |
+| `GET/HEAD /api/transfers/<id>/data` | destination, sender, host | The bytes, with `Range`, `ETag`, `X-LocalDrop-Sha256` |
 | `POST /api/files/open` | host | Open the received folder (local only) |
 | `POST /api/devices/forget` | host | Drop a device and its session |
 | `GET/POST /api/settings` | host + loopback | Read/change settings |
@@ -524,7 +589,7 @@ Everything else is a 404; unknown `/api/*` needs a session before it says so.
 python -m unittest discover -s tests -q
 ```
 
-128 cases, no network required (each spins up the app in-process or against a
+134 cases, no network required (each spins up the app in-process or against a
 loopback socket):
 
 - **Chunk protocol** — create, out-of-order chunk, overlapping chunk, duplicate
@@ -537,6 +602,11 @@ loopback socket):
   `test_pause_mid_download_keeps_the_bytes_already_received`: a destination can
   hold a ready file before pulling it, and pause a Range-chunk download while
   keeping the bytes it already received.
+- **Delivery** — progress is recorded server-side while the receiver pulls
+  Range chunks, so every watcher shows the receiver's real movement; when a
+  device-to-device send finishes, the staged relay copy is deleted the moment
+  the last byte leaves (a sweep retries if Windows still holds the file open);
+  re-pairing a device retires its own stale rows instead of duplicating them.
 - **Integrity** — streaming SHA-256 on finalize, digest served on download,
   truncated file refused.
 - **HTTP surface** — `Range` (open-ended, suffix, multi, unsatisfiable → 416),
