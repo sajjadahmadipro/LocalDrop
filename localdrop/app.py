@@ -22,6 +22,11 @@ STATIC_FILES = {
     "/app.js": ("app.js", "application/javascript; charset=utf-8"),
     "/icon.svg": ("icon.svg", "image/svg+xml"),
     "/favicon.ico": ("icon.svg", "image/svg+xml"),
+    "/manifest.json": ("manifest.json", "application/manifest+json"),
+    "/sw.js": ("sw.js", "application/javascript; charset=utf-8"),
+    "/icon-192.png": ("icon-192.png", "image/png"),
+    "/icon-512.png": ("icon-512.png", "image/png"),
+    "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
 }
 TOKEN_KEYS = ("token", "t")
 DEVICE_KEYS = ("device", "d")
