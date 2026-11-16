@@ -3,11 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#eef2f3">
+<meta name="theme-color" content="#eef4f9">
 <meta name="format-detection" content="telephone=no">
 <title>LocalDrop</title>
 <meta name="description" content="Send files between devices on your own Wi-Fi network.">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="LocalDrop">
 <link rel="stylesheet" href="/app.css">
 </head>
 <body class="booting">
@@ -20,7 +24,7 @@
 <div id="boot" class="screen" role="dialog" aria-labelledby="boot-title">
   <div class="boot-card">
     <span class="brandmark" aria-hidden="true">
-      <svg viewBox="0 0 48 48" width="48" height="48"><defs><linearGradient id="ldgBoot" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#14b8a6"/><stop offset="1" stop-color="#0c6b62"/></linearGradient></defs><rect x="2" y="2" width="44" height="44" rx="13" fill="url(#ldgBoot)"/><path d="M24 7C24 7 15.5 17 15.5 22.5A8.5 8.5 0 0 0 32.5 22.5C32.5 17 24 7 24 7Z" fill="#fff"/><path d="M17.5 35.5Q24 39.3 30.5 35.5" fill="none" stroke="#ccfbf1" stroke-width="2.3" stroke-linecap="round"/><path d="M13.5 39.8Q24 45 34.5 39.8" fill="none" stroke="#5eead4" stroke-width="2.3" stroke-linecap="round" opacity="0.8"/></svg>
+      <svg viewBox="0 0 48 48" width="48" height="48"><defs><linearGradient id="ldgBoot" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3282b8"/><stop offset="1" stop-color="#0f4c75"/></linearGradient></defs><rect x="2" y="2" width="44" height="44" rx="13" fill="url(#ldgBoot)"/><path d="M24 7C24 7 15.5 17 15.5 22.5A8.5 8.5 0 0 0 32.5 22.5C32.5 17 24 7 24 7Z" fill="#fff"/><path d="M17.5 35.5Q24 39.3 30.5 35.5" fill="none" stroke="#dceefb" stroke-width="2.3" stroke-linecap="round"/><path d="M13.5 39.8Q24 45 34.5 39.8" fill="none" stroke="#bbe1fa" stroke-width="2.3" stroke-linecap="round" opacity="0.8"/></svg>
     </span>
     <h1 id="boot-title">LocalDrop</h1>
     <p class="muted" id="boot-msg">Connecting to LocalDrop&hellip;</p>
@@ -36,7 +40,7 @@
 <div id="pair" class="screen hidden">
   <div class="pair-card">
     <span class="brandmark" aria-hidden="true">
-      <svg viewBox="0 0 48 48" width="44" height="44"><defs><linearGradient id="ldgPair" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#14b8a6"/><stop offset="1" stop-color="#0c6b62"/></linearGradient></defs><rect x="2" y="2" width="44" height="44" rx="13" fill="url(#ldgPair)"/><path d="M24 7C24 7 15.5 17 15.5 22.5A8.5 8.5 0 0 0 32.5 22.5C32.5 17 24 7 24 7Z" fill="#fff"/><path d="M17.5 35.5Q24 39.3 30.5 35.5" fill="none" stroke="#ccfbf1" stroke-width="2.3" stroke-linecap="round"/><path d="M13.5 39.8Q24 45 34.5 39.8" fill="none" stroke="#5eead4" stroke-width="2.3" stroke-linecap="round" opacity="0.8"/></svg>
+      <svg viewBox="0 0 48 48" width="44" height="44"><defs><linearGradient id="ldgPair" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3282b8"/><stop offset="1" stop-color="#0f4c75"/></linearGradient></defs><rect x="2" y="2" width="44" height="44" rx="13" fill="url(#ldgPair)"/><path d="M24 7C24 7 15.5 17 15.5 22.5A8.5 8.5 0 0 0 32.5 22.5C32.5 17 24 7 24 7Z" fill="#fff"/><path d="M17.5 35.5Q24 39.3 30.5 35.5" fill="none" stroke="#dceefb" stroke-width="2.3" stroke-linecap="round"/><path d="M13.5 39.8Q24 45 34.5 39.8" fill="none" stroke="#bbe1fa" stroke-width="2.3" stroke-linecap="round" opacity="0.8"/></svg>
     </span>
     <h1>Pair with LocalDrop</h1>
     <p class="muted">Type the 6-digit code shown on the computer running LocalDrop.</p>
@@ -89,6 +93,7 @@
             <span class="drop-text">
               <span class="drop-title" id="drop-title">Drop files to share</span>
               <span class="drop-sub" id="drop-sub">Drag and drop here, or browse your device.</span>
+              <span class="drop-files hidden" id="picked"></span>
             </span>
             <span class="drop-action">
               <label class="btn btn-soft file-btn" id="file-btn">
@@ -96,21 +101,34 @@
                 <input type="file" id="file-input" multiple>
               </label>
             </span>
+            <span class="drop-send hidden" id="picked-actions">
+              <button type="button" class="btn btn-primary" id="send-picked">Send</button>
+              <button type="button" class="btn btn-ghost" id="clear-picked">Cancel</button>
+            </span>
           </span>
-          <p class="target-line"><span class="drop-target-dot" aria-hidden="true"></span><span id="target-sub">Choose a device first</span></p>
           <p class="drop-hint" id="drop-hint"></p>
         </div>
-        <div class="picked hidden" id="picked"></div>
-        <div class="picked-actions hidden" id="picked-actions">
-          <button type="button" class="btn btn-primary btn-big" id="send-picked">Send</button>
-          <button type="button" class="btn btn-ghost" id="clear-picked">Remove</button>
-          <span class="picked-total" id="picked-total"></span>
-        </div>
         <div class="panel-head transfers-head" id="transfers-head">
-          <h2>Transfers</h2>
-          <button type="button" class="text-btn" id="btn-clear">Clear finished</button>
+          <div class="bulk-tools hidden" id="bulk-tools">
+            <label class="bulk-all"><input type="checkbox" id="bulk-all"> All</label>
+            <span class="bulk-count" id="bulk-count">0 selected</span>
+            <button type="button" class="btn btn-danger btn-small" id="bulk-delete" disabled>Delete</button>
+          </div>
         </div>
         <div class="queue-scroll" id="queue-scroll">
+          <div class="queue-head" id="queue-head">
+            <div class="row-line">
+              <span class="c-check"><input type="checkbox" class="row-check" id="head-all" aria-label="Select all transfers"></span>
+              <span class="c-ctl"></span>
+              <span class="c-name"><span class="qh-label">Name</span></span>
+              <span class="c-stats"><span class="stats-table">
+                <span class="c-bar"><span class="qh-label">Status</span></span>
+                <span class="c-speed"><span class="qh-label">Speed</span></span>
+                <span class="c-size"><span class="qh-label">Size</span></span>
+              </span></span>
+              <span class="c-del"></span>
+            </div>
+          </div>
           <div class="queue" id="queue" aria-live="polite"></div>
           <p class="empty hidden" id="queue-empty">Nothing here yet.</p>
         </div>
@@ -131,7 +149,7 @@
     <aside class="rail" aria-label="Reachable devices and network address">
       <div class="rail-brand">
         <span class="brandmark" aria-hidden="true">
-          <svg viewBox="0 0 48 48" width="30" height="30"><defs><linearGradient id="ldgRail" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#14b8a6"/><stop offset="1" stop-color="#0c6b62"/></linearGradient></defs><rect x="2" y="2" width="44" height="44" rx="13" fill="url(#ldgRail)"/><path d="M24 7C24 7 15.5 17 15.5 22.5A8.5 8.5 0 0 0 32.5 22.5C32.5 17 24 7 24 7Z" fill="#fff"/><path d="M17.5 35.5Q24 39.3 30.5 35.5" fill="none" stroke="#ccfbf1" stroke-width="2.3" stroke-linecap="round"/><path d="M13.5 39.8Q24 45 34.5 39.8" fill="none" stroke="#5eead4" stroke-width="2.3" stroke-linecap="round" opacity="0.8"/></svg>
+          <svg viewBox="0 0 48 48" width="30" height="30"><defs><linearGradient id="ldgRail" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3282b8"/><stop offset="1" stop-color="#0f4c75"/></linearGradient></defs><rect x="2" y="2" width="44" height="44" rx="13" fill="url(#ldgRail)"/><path d="M24 7C24 7 15.5 17 15.5 22.5A8.5 8.5 0 0 0 32.5 22.5C32.5 17 24 7 24 7Z" fill="#fff"/><path d="M17.5 35.5Q24 39.3 30.5 35.5" fill="none" stroke="#dceefb" stroke-width="2.3" stroke-linecap="round"/><path d="M13.5 39.8Q24 45 34.5 39.8" fill="none" stroke="#bbe1fa" stroke-width="2.3" stroke-linecap="round" opacity="0.8"/></svg>
         </span>
         <span class="brand-name">LocalDrop</span>
       </div>
@@ -153,10 +171,71 @@
       </div>
     </aside>
   </main>
+
+  <div class="mobile-bar" id="mobile-bar">
+    <button type="button" class="mobile-trigger" id="mobile-trigger" aria-haspopup="listbox" aria-expanded="false">
+      <span class="mt-icon" id="mt-icon" aria-hidden="true"></span>
+      <span class="mt-text">
+        <span class="mt-name" id="mt-name">Choose a device to send</span>
+      </span>
+      <span class="mt-chev" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 14l6-6 6 6"/></svg>
+      </span>
+    </button>
+  </div>
+  <div class="mpicker-backdrop hidden" id="mpicker-backdrop"></div>
+  <div class="mpicker hidden" id="mpicker" role="dialog" aria-label="Choose a device to send to">
+    <div class="mpicker-head">
+      <span class="mpicker-title">Send to</span>
+      <button type="button" class="icon-btn mpicker-close" id="mpicker-close" aria-label="Close device picker">
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="mpicker-search-row">
+      <input type="text" class="mpicker-search" id="mpicker-search" placeholder="Search devices"
+             autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Search devices">
+    </div>
+    <div class="mpicker-list" id="mpicker-list" role="listbox"></div>
+    <p class="mpicker-empty hidden" id="mpicker-empty">No other devices yet.</p>
+  </div>
 </div>
 
 <!-- ==================== incoming notifications ==================== -->
 <div class="notif-stack" id="notif-stack" aria-live="polite" aria-label="Incoming files"></div>
+
+<!-- ==================== delete confirmation ==================== -->
+<div id="delete-sheet" class="sheet sheet-center hidden" role="dialog" aria-label="Delete transfer">
+  <div class="sheet-card">
+    <div class="sheet-head">
+      <h2 id="delete-title">Delete transfer?</h2>
+      <button type="button" class="icon-btn" data-close="delete-sheet" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <p class="delete-msg" id="delete-msg"></p>
+    <div class="delete-actions">
+      <button type="button" class="btn btn-danger" id="delete-file">Delete file</button>
+      <button type="button" class="btn btn-ghost" id="delete-keep">Remove from list</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== cancel confirmation ==================== -->
+<div id="cancel-sheet" class="sheet sheet-center hidden" role="dialog" aria-label="Cancel transfer">
+  <div class="sheet-card">
+    <div class="sheet-head">
+      <h2 id="cancel-title">Cancel transfer?</h2>
+      <button type="button" class="icon-btn" data-close="cancel-sheet" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <p class="delete-msg" id="cancel-msg"></p>
+    <div class="cancel-actions">
+      <button type="button" class="btn btn-danger" id="cancel-confirm">Cancel transfer</button>
+      <button type="button" class="btn btn-ghost" id="cancel-keep">Keep</button>
+    </div>
+  </div>
+</div>
 
 <!-- ==================== QR / address sheet ==================== -->
 <div id="qr-sheet" class="sheet hidden" role="dialog" aria-label="Connect a device">
@@ -184,73 +263,64 @@
       </button>
     </div>
 
-    <div class="setting">
-      <label for="set-chunk">Chunk size</label>
-      <select id="set-chunk">
-        <option value="262144">256 KB &mdash; flakiest Wi-Fi</option>
-        <option value="524288">512 KB</option>
-        <option value="1048576">1 MB &mdash; recommended for iPad</option>
-        <option value="2097152">2 MB</option>
-        <option value="4194304">4 MB &mdash; fast laptops</option>
-      </select>
-      <span class="setting-note">Smaller chunks recover faster when a connection drops.</span>
-    </div>
-
-    <div class="setting">
-      <label for="set-poll">Refresh rate</label>
-      <select id="set-poll">
-        <option value="1500">Snappy (1.5 s)</option>
-        <option value="2500">Balanced (2.5 s)</option>
-        <option value="5000">Gentle (5 s)</option>
-      </select>
-      <span class="setting-note">How often browsers ask the server for updates.</span>
-    </div>
-
-    <div class="setting">
-      <label for="set-timeout">Device is offline after</label>
-      <select id="set-timeout">
-        <option value="15">15 seconds</option>
-        <option value="30">30 seconds</option>
-        <option value="60">1 minute</option>
-      </select>
-      <span class="setting-note">Longer is kinder to a sleeping iPad; shorter hides stale devices sooner.</span>
-    </div>
-
-    <div class="setting setting-row">
-      <label class="check"><input type="checkbox" id="set-autoaccept"> Accept incoming files automatically</label>
-      <span class="setting-note">Off means every transfer needs a tap on the receiving device.</span>
-    </div>
-
-    <div class="setting setting-row">
-      <label class="check"><input type="checkbox" id="set-startup"> Start LocalDrop when Windows signs in</label>
-      <span class="setting-note">The desktop launcher writes the sign-in entry; this switch mirrors it.</span>
-    </div>
-
-    <div class="setting">
-      <label for="set-limit">Refuse uploads larger than (MB, 0 = no limit)</label>
-      <input type="text" id="set-limit" class="text-input" inputmode="numeric" placeholder="0">
-    </div>
-
-    <div class="setting">
-      <label>Current pairing code</label>
-      <p class="pin-readout" id="set-pin">&mdash;</p>
-      <span class="setting-note">New devices type this once. Changing it does not disconnect devices that already paired.</span>
+    <div class="set-cols">
+      <div class="set-col">
+        <h3 class="set-group">Sending</h3>
+        <div class="setting">
+          <label for="set-chunk">Chunk size</label>
+          <select id="set-chunk">
+            <option value="262144">256 KB &mdash; flakiest Wi-Fi</option>
+            <option value="524288">512 KB</option>
+            <option value="1048576">1 MB &mdash; recommended for iPad</option>
+            <option value="2097152">2 MB</option>
+            <option value="4194304">4 MB &mdash; fast laptops</option>
+            <option value="8388608">8 MB &mdash; fastest LAN</option>
+          </select>
+          <span class="setting-note">Smaller chunks recover faster when a connection drops.</span>
+        </div>
+        <div class="setting">
+          <label for="set-poll">Refresh rate</label>
+          <select id="set-poll">
+            <option value="1500">Snappy (1.5 s)</option>
+            <option value="2500">Balanced (2.5 s)</option>
+            <option value="5000">Gentle (5 s)</option>
+          </select>
+          <span class="setting-note">How often browsers ask the server for updates.</span>
+        </div>
+        <div class="setting">
+          <label for="set-limit">Refuse uploads larger than (MB, 0 = no limit)</label>
+          <input type="text" id="set-limit" class="text-input" inputmode="numeric" placeholder="0">
+        </div>
+      </div>
+      <div class="set-col">
+        <h3 class="set-group">Pairing</h3>
+        <div class="setting">
+          <label>Current pairing code</label>
+          <p class="pin-readout" id="set-pin">&mdash;</p>
+          <button type="button" class="btn btn-ghost btn-small" id="set-rotate">New pairing code</button>
+        </div>
+        <h3 class="set-group">Devices</h3>
+        <div class="setting">
+          <label for="set-timeout">Device is offline after</label>
+          <select id="set-timeout">
+            <option value="15">15 seconds</option>
+            <option value="30">30 seconds</option>
+            <option value="60">1 minute</option>
+          </select>
+          <span class="setting-note">Longer is kinder to a sleeping iPad; shorter hides stale devices sooner.</span>
+        </div>
+        <div class="setting setting-row">
+          <label class="check"><input type="checkbox" id="set-autoaccept"> Accept incoming files automatically</label>
+          <span class="setting-note">Off means every transfer needs a tap on the receiving device.</span>
+        </div>
+      </div>
     </div>
 
     <div class="settings-actions">
       <button type="button" class="btn btn-primary" id="set-save">Save settings</button>
-      <button type="button" class="btn btn-ghost" id="set-rotate">New pairing code</button>
       <button type="button" class="btn btn-ghost" id="set-folder">Open received folder</button>
-      <button type="button" class="btn btn-danger" id="set-clear">Clear finished history</button>
     </div>
     <p class="pair-error hidden" id="set-error" role="alert"></p>
-
-    <dl class="paths">
-      <dt>Received files</dt><dd id="path-incoming">&hellip;</dd>
-      <dt>Incomplete data</dt><dd id="path-temp">&hellip;</dd>
-      <dt>Database</dt><dd id="path-db">&hellip;</dd>
-      <dt>Log</dt><dd id="path-log">&hellip;</dd>
-    </dl>
     <p class="hint">Firewall: use the launcher&rsquo;s <em>Allow on this network</em> button if devices cannot connect. Incomplete transfers are never deleted on their own &mdash; clear them yourself.</p>
     <p class="hint" id="settings-stats"></p>
   </div>

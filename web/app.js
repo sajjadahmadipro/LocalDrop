@@ -116,7 +116,8 @@
     timer: null,
     screen: "boot",
     target: "",
-    picked: []
+    picked: [],
+    selected: {}
   };
 
   function isHost() { return !!(S.me && S.me.role === "host"); }
@@ -226,10 +227,11 @@
     xhr.onabort = function () { finish("aborted", 0, null); };
     if (xhr.upload) {
       xhr.upload.onprogress = function (e) {
-        if (e.lengthComputable) { up.progressAcked(offset + e.loaded, e.length); }
+        var job = up[tid];
+        if (e.lengthComputable && job) { job.progressAcked(offset + e.loaded, e.length); }
       };
     }
-    sendBody(xhr, part, cb);
+    sendBody(xhr, part, finish);
     return xhr;
   }
 
@@ -246,6 +248,7 @@
     this.file = file;
     this.name = rec.name;
     this.size = rec.size;
+    this.offer = rec.offer;
     this.offset = rec.offset || 0;
     this.sent = this.offset;      // bytes the browser has pushed at the server
     this.chunk = chunkSize();
@@ -385,15 +388,52 @@
 
   function uploaderFor(tid) { return up[tid] || null; }
 
+  // While a send sits held for the receiver's Accept, re-check far faster than the
+  // normal poll cadence, so tapping Accept starts the transfer almost at once.
+  var gateTimer = null;
+  function gatePoll(held) {
+    if (!held) {
+      if (gateTimer) { window.clearTimeout(gateTimer); gateTimer = null; }
+      return;
+    }
+    if (gateTimer) { return; }
+    gateTimer = window.setTimeout(function () {
+      gateTimer = null;
+      poll(true);
+    }, 800);
+  }
+
   function runQueue() {
-    var limit = parallel(), id, job;
-    if (upCount() >= limit) { return; }
+    var limit = parallel(), id, job, rec, held = 0, slots = limit - upCount();
     for (id in up) {
       if (!up.hasOwnProperty(id)) { continue; }
       job = up[id];
       if (job.busy || job.paused || job.done || job.waiting) { continue; }
+      // Sending waits for the receiver's Accept: a pending offer holds its chunks.
+      rec = transferById(id);
+      if (rec) { job.offer = rec.offer; }
+      if (job.offer === "pending") { held++; continue; }
+      if (slots <= 0) { continue; }
       job.pump();
-      if (upCount() >= limit) { break; }
+      slots--;
+    }
+    gatePoll(held > 0);
+  }
+
+  // The receiver can pause or resume an upload too. When a resume lands on the
+  // server while this browser's uploader is still locally paused, follow it.
+  function syncUploadJobs() {
+    var id, job, rec;
+    for (id in up) {
+      if (!up.hasOwnProperty(id)) { continue; }
+      job = up[id];
+      if (job.done || job.closing || !job.paused) { continue; }
+      rec = transferById(id);
+      if (rec && rec.offer !== "pending" &&
+          (rec.status === "uploading" || rec.status === "pending")) {
+        job.paused = false;
+        job.retrying = 0;
+      }
     }
   }
 
@@ -432,7 +472,7 @@
           note((data && data.error) || "That is not the same file.", true);
           return;
         }
-        beginUpload({ id: tid, name: row.name, size: row.size, offset: data.offset || 0 }, file);
+        beginUpload({ id: tid, name: row.name, size: row.size, offset: data.offset || 0, offer: row.offer }, file);
         note("Resumed " + row.name + " from " + bytes(data.offset || 0));
         runQueue();
         poll(true);
@@ -481,7 +521,8 @@
         }
         beginUpload({
           id: data.transfer.id, name: data.transfer.name,
-          size: data.transfer.size, offset: data.offset || 0
+          size: data.transfer.size, offset: data.offset || 0,
+          offer: data.transfer.offer
         }, file);
         next(index + 1);
       });
@@ -496,6 +537,7 @@
      Safari (iOS 9) cannot save a Blob, so it gets the native download link and
      an honest note instead. */
   var down = {};     // transferId -> Downloader
+  var autoStart = {};   // transferId -> 1 after the receiver accepts, until it auto-starts
   var saveBlobOk = null;
   function canSaveBlob() {
     if (saveBlobOk === null) {
@@ -613,7 +655,9 @@
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    window.setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    // The browser may hold the save behind a Keep/Discard prompt; revoking too
+    // early would kill a download the user then approves.
+    window.setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
     delete down[this.tid];
     note("Saved " + this.name);
     poll(true);
@@ -634,7 +678,14 @@
     if (!row) { return; }
     var job = downloaderFor(tid);
     if (job) { job.paused = false; job.pump(); return; }
-    if (!canSaveBlob() || row.size > jsDownloadLimit()) { nativeDownload(tid, row); return; }
+    if (!canSaveBlob() || row.size > jsDownloadLimit()) {
+      // Browsers that cannot save a Blob (old iOS Safari) play the file instead:
+      // watching is the only way they can use it. Modern browsers hitting the
+      // memory limit get a forced attachment so videos do not open in the
+      // browser's player tab.
+      nativeDownload(tid, row, canSaveBlob());
+      return;
+    }
     if (row.status === "paused") {
       callAction(tid, "resume", {}, function () { beginDownload(tid); });
       return;
@@ -650,9 +701,10 @@
     poll(true);
   }
 
-  function nativeDownload(tid, row) {
+  function nativeDownload(tid, row, modern) {
     var a = document.createElement("a");
-    a.href = dataUrl(tid);
+    a.href = dataUrl(tid) + (modern ? "&disposition=attach" : "");
+    if (modern && row && row.name) { a.download = row.name; }
     a.style.display = "none";
     document.body.appendChild(a);
     a.click();
@@ -827,7 +879,16 @@
   }
 
   /* ----------------------------------------------------------------- boot */
+  // Installable-app shell worker. Browsers only expose service workers on
+  // secure origins (http://localhost on the PC); phones on plain-http LAN
+  // addresses skip this, and the page keeps working as before.
+  function registerSW() {
+    if (!navigator.serviceWorker) { return; }
+    try { navigator.serviceWorker.register(BASE + "/sw.js"); } catch (e) {}
+  }
+
   function boot() {
+    registerSW();
     screenTo("boot");
     addClass($("boot"), "waiting");
     text($("boot-msg"), "Connecting to LocalDrop&hellip;");
@@ -882,6 +943,8 @@
       S.transfers = data.transfers || [];
       applyTheme();
       renderAll();
+      syncUploadJobs();
+      runQueue();
       if (wasUnreachable) { reconnectHeal(); }
       var delay = busyCount() ? (S.server.poll_ms || 1500)
                               : (S.server.idle_poll_ms || 5000);
@@ -972,9 +1035,11 @@
     renderAddress();
     renderDevices();
     renderTarget();
+    renderMobileList();
     renderQueue();
     renderPicked();
     renderOffers();
+    runAutoStart();
     renderBookHelp();
     renderSettingsButton();
     layout();
@@ -1037,21 +1102,31 @@
   function renderDevices() {
     var searchEl = $("device-search");
     var q = searchEl ? (searchEl.value || "").toLowerCase().replace(/^\s+|\s+$/g, "") : "";
-    var html = "", i, d, total = 0, list = S.devices || [];
+    var list = S.devices || [], ordered = [], i, d, total = 0, html = "";
     for (i = 0; i < list.length; i++) {
       d = list[i];
-      if (isSelf(d)) { continue; }
+      if (!isSelf(d) && S.target && d.id === S.target) { ordered.push(d); }
+    }
+    for (i = 0; i < list.length; i++) {
+      d = list[i];
+      if (!isSelf(d) && !(S.target && d.id === S.target)) { ordered.push(d); }
+    }
+    for (i = 0; i < ordered.length; i++) {
+      d = ordered[i];
       total++;
       if (q && String(d.name || "").toLowerCase().indexOf(q) < 0) { continue; }
       var usable = d.online && d.paired;
-      html += '<button type="button" class="device' + (S.target === d.id ? " is-on" : "") +
-              (usable ? "" : " is-offline") + '" data-device="' + esc(d.id) + '">' +
+      html += '<button type="button" class="device' +
+              (S.target === d.id ? " is-target" : "") +
+              (usable ? "" : " is-offline") +
+              '" data-device="' + esc(d.id) + '">' +
               '<span class="dev-icon">' + kindIcon(d.kind) + "</span>" +
               '<span class="dev-name">' + esc(d.name) + "</span>" +
               '<span class="dev-meta">' + esc(kindLabel(d)) + "</span>" +
               '<span class="dev-state ' + (d.online ? "on" : "off") + '">' +
               (d.online ? "Online" : "Seen " + ago(d.seconds_since_seen)) +
-              "</span></button>";
+              "</span>" +
+              "</button>";
     }
     text($("devices"), html);
     var emptyEl = $("devices-empty");
@@ -1067,14 +1142,75 @@
 
   function kindLabel(d) {
     if (d.local) { return "This computer"; }
-    if (d.kind && d.kind !== "unknown") { return d.kind.charAt(0).toUpperCase() + d.kind.slice(1); }
-    return "Browser";
+    var names = { ipad: "iPad", iphone: "iPhone", ipod: "iPod", android: "Android",
+                  mac: "Mac", windows: "Windows", linux: "Linux" };
+    return names[d.kind] || "Browser";
+  }
+
+  // Rebuilt only when the target, query, or device set changes, so polling
+  // never resets the list scroll position while the picker is open.
+  var pickerSig = "";
+  function renderMobileList() {
+    var listEl = $("mpicker-list");
+    if (!listEl) { return; }
+    var searchEl = $("mpicker-search");
+    var q = searchEl ? (searchEl.value || "").toLowerCase().replace(/^\s+|\s+$/g, "") : "";
+    var list = S.devices || [], i, d, sig = (S.target || "") + "|" + q + "|", html = "", total = 0, usable;
+    for (i = 0; i < list.length; i++) {
+      d = list[i];
+      if (isSelf(d)) { continue; }
+      sig += d.id + ":" + (d.online ? 1 : 0) + ":" + (d.paired ? 1 : 0) + ",";
+    }
+    if (sig === pickerSig) { return; }
+    pickerSig = sig;
+    for (i = 0; i < list.length; i++) {
+      d = list[i];
+      if (isSelf(d)) { continue; }
+      total++;
+      if (q && String(d.name || "").toLowerCase().indexOf(q) < 0) { continue; }
+      usable = d.online && d.paired;
+      html += '<button type="button" class="mpicker-opt' + (S.target === d.id ? " is-on" : "") +
+              (usable ? "" : " is-offline") + '" data-device="' + esc(d.id) + '"' +
+              (usable ? "" : " disabled") + '>' +
+              '<span class="mo-icon">' + kindIcon(d.kind) + "</span>" +
+              '<span class="mo-text"><span class="mo-name">' + esc(d.name) + "</span>" +
+              '<span class="mo-meta">' + esc(kindLabel(d)) + "</span></span>" +
+              '<span class="mo-state ' + (d.online ? "on" : "off") + '">' +
+              (d.online ? "Online" : "Seen " + ago(d.seconds_since_seen)) +
+              "</span></button>";
+    }
+    text(listEl, html);
+    var emptyEl = $("mpicker-empty");
+    if (!html) {
+      text(emptyEl, (total && q)
+        ? "No devices match \u201c" + esc(q) + "\u201d."
+        : "No other devices yet. Open the address on another device and pair it.");
+      show(emptyEl, true);
+    } else {
+      show(emptyEl, false);
+    }
+  }
+
+  function openMPicker() {
+    var trig = $("mobile-trigger");
+    show($("mpicker-backdrop"), true);
+    show($("mpicker"), true);
+    if (trig) { addClass(trig, "is-open"); trig.setAttribute("aria-expanded", "true"); }
+    pickerSig = "";
+    renderMobileList();
+  }
+
+  function closeMPicker() {
+    var trig = $("mobile-trigger"), searchEl = $("mpicker-search");
+    show($("mpicker-backdrop"), false);
+    show($("mpicker"), false);
+    if (trig) { drop(trig, "is-open"); trig.setAttribute("aria-expanded", "false"); }
+    if (searchEl) { searchEl.value = ""; }
+    pickerSig = "";
   }
 
   function renderTarget() {
     var d = S.target ? deviceById(S.target) : null;
-    var label = d ? "Sending to " + d.name : "Choose a device first";
-    text($("target-sub"), esc(label));
     var btn = $("send-picked");
     if (btn) {
       btn.disabled = !S.target;
@@ -1084,15 +1220,18 @@
     }
     var hint = $("drop-hint");
     if (hint) {
-      text(hint, d ? "Files are uploaded in " + bytes(S.server ? S.server.chunk_size : 1048576) +
-           " pieces, so an interrupted send picks up where it stopped."
-           : "Pick the device you want to receive these files.");
+      text(hint, "Files are uploaded in " + bytes(S.server ? S.server.chunk_size : 1048576) +
+           " pieces, so an interrupted send picks up where it stopped.");
     }
+    var mtName = $("mt-name"), mtIcon = $("mt-icon");
+    if (mtName) { text(mtName, d ? esc(d.name) : "Choose a device to send"); }
+    if (mtIcon) { mtIcon.innerHTML = d ? kindIcon(d.kind) : icon("laptop", 20); }
   }
 
   function chooseTarget(id) {
     var d = deviceById(id);
-    if (!d || !d.online) { note("That device is not reachable right now.", true); return; }
+    if (!d || isSelf(d)) { return; }
+    if (!d.online) { note("That device is not reachable right now.", true); return; }
     S.target = id;
     renderDevices();
     renderTarget();
@@ -1108,12 +1247,12 @@
     if (isHost()) {
       for (i = 0; i < S.devices.length; i++) {
         d = S.devices[i];
-        if (!d.local && d.online && d.role !== "host") { S.target = d.id; return; }
+        if (!d.local && d.online && d.role !== "host" && !isSelf(d)) { S.target = d.id; return; }
       }
     } else {
       for (i = 0; i < S.devices.length; i++) {
         d = S.devices[i];
-        if (d.local) { S.target = d.id; return; }
+        if (d.local && !isSelf(d)) { S.target = d.id; return; }
       }
     }
     for (i = 0; i < S.devices.length; i++) {
@@ -1124,19 +1263,19 @@
 
   /* --------------------------------------------------------- picked files */
   function renderPicked() {
-    var i, f, html = "", total = 0;
+    var i, f, kind, html = "", total = 0;
     for (i = 0; i < S.picked.length; i++) {
       f = S.picked[i];
       total += f.size;
-      html += '<div class="picked-row"><span class="pk-name">' + esc(f.name) +
-              '</span><span class="pk-size">' + bytes(f.size) + "</span></div>";
+      kind = fileIcon(f.name);
+      html += '<span class="drop-file"><span class="pf-icon ' + kind[0] + '">' + kind[2] +
+              '</span><span class="pk-name">' + esc(f.name) +
+              '</span><span class="pk-size">' + bytes(f.size) + "</span></span>";
     }
     text($("picked"), html);
     show($("picked"), S.picked.length > 0);
     show($("picked-actions"), S.picked.length > 0);
-    text($("picked-total"), S.picked.length
-      ? S.picked.length + " file" + (S.picked.length > 1 ? "s" : "") + " \u00b7 " + bytes(total)
-      : "");
+    toggle($("drop"), "is-picked", S.picked.length > 0);
     layout();
   }
 
@@ -1185,6 +1324,9 @@
     if (forMe && t.offer === "pending" && s !== "rejected" && s !== "canceled") {
       return ["Needs your OK", "s-warn"];
     }
+    if (mine && t.offer === "pending" && s !== "rejected" && s !== "canceled") {
+      return ["Waiting for OK", "s-warn"];
+    }
     if (s === "pending") { return [forMe ? "Incoming" : "Queued", forMe ? "s-run" : ""]; }
     if (s === "uploading") { return [mine ? "Sending" : (forMe ? "On its way" : "Sending"), "s-run"]; }
     if (s === "paused") { return ["Paused", "s-warn"]; }
@@ -1201,6 +1343,14 @@
     if (s === "canceled") { return ["Canceled", ""]; }
     if (s === "error") { return ["Failed", "s-bad"]; }
     return [s, ""];
+  }
+
+  // Direction strap: a thin coloured stripe on the row's left edge. The hue says
+  // what the transfer is without spending a whole column on it.
+  function strapFor(t) {
+    if (/^(error|rejected|canceled)$/.test(t.status)) { return "dir-stopped"; }
+    if (t.status === "complete") { return t.mine ? "dir-sent" : "dir-recvd"; }
+    return (t.for_me && !t.mine) ? "dir-recv" : "dir-send";
   }
 
   function visibleRows() {
@@ -1227,7 +1377,7 @@
         node = document.createElement("div");
         node.className = "row";
         node.setAttribute("data-tid", t.id);
-        node.innerHTML = rowInner(t);
+        node.innerHTML = rowInner();
         queue.appendChild(node);
         rowNodes[t.id] = node;
       }
@@ -1245,22 +1395,23 @@
     }
     show($("queue-empty"), rows.length === 0);
     text($("queue-empty"), "Nothing transferring yet. Files you send or receive appear here.");
+    renderBulk();
+    layout();
   }
 
-  function rowInner(t) {
-    var iconInfo = fileIcon(t.name);
-    return '<div class="row-ico ' + iconInfo[0] + '" aria-hidden="true">' + iconInfo[2] + "</div>" +
-      '<div class="row-body">' +
-        '<div class="row-line1">' +
-          '<span class="row-name"></span><span class="row-state"></span>' +
-        "</div>" +
-        '<div class="bar"><i></i></div>' +
-        '<div class="row-line2">' +
-          '<span class="row-meta"></span><span class="row-speed hidden"></span>' +
-        "</div>" +
-        '<div class="row-note hidden"></div>' +
-        '<div class="row-actions"></div>' +
-      "</div>";
+  function rowInner() {
+    return '<span class="row-strap"></span>' +
+      '<div class="row-line">' +
+      '<span class="c-check"><input type="checkbox" class="row-check" aria-label="Select this transfer"></span>' +
+      '<span class="c-ctl"></span>' +
+      '<span class="c-name"><span class="row-name"></span></span>' +
+      '<span class="c-stats"><span class="stats-table">' +
+        '<span class="c-bar"><div class="bar"><i></i></div><span class="row-pct"></span></span>' +
+        '<span class="c-speed"><span class="row-speed"></span></span>' +
+        '<span class="c-size"><span class="row-size"></span></span>' +
+      "</span></span>" +
+      '<span class="c-del"></span>' +
+    "</div>";
   }
 
   function stalledUpload(t) {
@@ -1288,56 +1439,60 @@
     return db > 0 ? db / dt : 0;
   }
 
-  function actBtn(act, tid, label, cls, iconName) {
-    return '<button type="button" class="' + cls + '" data-act="' + act +
-           '" data-tid="' + esc(tid) + '">' + icon(iconName, 14) + esc(label) + "</button> ";
+  function ctlBtn(act, tid, iconName, title, danger) {
+    return '<button type="button" class="row-btn' + (danger ? " row-btn-danger" : "") +
+           '" data-act="' + act + '" data-tid="' + esc(tid) + '" title="' + esc(title) +
+           '" aria-label="' + esc(title) + '">' + icon(iconName, 16) + "</button>";
   }
 
-  function rowActions(t) {
-    var job = uploaderFor(t.id), djob = downloaderFor(t.id), out = "", lost = !job;
+  // Motion controls sit at the start of the row, delete at the far end. A finished
+  // file shows open-folder (the PC inbox) or download again while the server
+  // still holds a copy; delivered relays drop theirs, so only Delete remains.
+  function rowControls(t) {
+    var job = uploaderFor(t.id), djob = downloaderFor(t.id), left = "", right = "";
     var uploading = t.stage === "upload" &&
-                    /^(pending|uploading|paused|interrupted|verifying)$/.test(t.status);
+                    /^(pending|ready|uploading|downloading|paused|interrupted|verifying)$/.test(t.status);
+    var terminal = /^(complete|canceled|rejected|error)$/.test(t.status);
     if (t.mine && uploading) {
-      if (stalledUpload(t)) {
-        out += actBtn("reselect", t.id, "Reselect file", "btn btn-primary btn-small", "refresh");
-      } else if (t.status === "paused") {
-        out += actBtn("resume", t.id, "Resume", "btn btn-primary btn-small", "play");
-      } else if (t.status === "interrupted") {
-        out += lost ? actBtn("reselect", t.id, "Reselect file", "btn btn-primary btn-small", "refresh")
-                    : actBtn("resume", t.id, "Resume", "btn btn-primary btn-small", "play");
-      } else if (t.status === "verifying") { /* nothing to press */ }
-      else { out += actBtn("pause", t.id, "Pause", "btn btn-small", "pause"); }
-      out += actBtn("cancel", t.id, "Cancel", "btn btn-ghost btn-small", "x");
-    }
-    if (t.for_me && t.stage === "download" && t.offer !== "pending") {
-      if (t.status === "ready") {
-        out += actBtn("download", t.id, "Download", "btn btn-primary btn-small", "download");
-        out += actBtn("pause", t.id, "Pause", "btn btn-ghost btn-small", "pause");
-      } else if (t.status === "downloading") {
-        if (djob) { out += actBtn("pause", t.id, "Pause", "btn btn-small", "pause"); }
-      } else if (t.status === "paused") {
-        out += actBtn("resume", t.id, "Resume", "btn btn-primary btn-small", "play");
-        out += actBtn("download", t.id, "Download", "btn btn-soft btn-small", "download");
-      } else if (t.status === "complete") {
-        out += actBtn("download", t.id, "Download again", "btn btn-soft btn-small", "download");
+      if (stalledUpload(t)) { left = ctlBtn("reselect", t.id, "refresh", "Reselect file"); }
+      else if (t.status === "paused") { left = ctlBtn("resume", t.id, "play", "Resume"); }
+      else if (t.status === "interrupted") {
+        left = job ? ctlBtn("resume", t.id, "play", "Resume")
+                   : ctlBtn("reselect", t.id, "refresh", "Reselect file");
+      } else if (t.status !== "verifying") { left = ctlBtn("pause", t.id, "pause", "Pause"); }
+      right = ctlBtn("cancel", t.id, "x", "Cancel", true);
+    } else if (t.status === "complete") {
+      if (isHost() && t.dest === "local") { left = ctlBtn("folder", t.id, "folder", "Open folder"); }
+      else if (t.downloadable) {
+        left = ctlBtn("download", t.id, "download", "Download again");
       }
+      right = ctlBtn("delete", t.id, "trash", "Delete", true);
+    } else if (t.for_me && t.stage === "download" && t.offer !== "pending") {
+      if (t.status === "ready") { left = ctlBtn("download", t.id, "play", "Download"); }
+      else if (t.status === "downloading") { left = djob ? ctlBtn("pause", t.id, "pause", "Pause") : ""; }
+      else if (t.status === "paused") { left = ctlBtn("resume", t.id, "play", "Resume"); }
+      right = ctlBtn("delete", t.id, "trash", "Delete", true);
+    } else if (t.for_me && t.stage === "upload" && t.offer !== "pending") {
+      // The receiver shares pause/resume/cancel while the sender is uploading.
+      if (t.status === "paused" || t.status === "interrupted") {
+        left = ctlBtn("resume", t.id, "play", "Resume");
+      } else if (t.status === "uploading" || t.status === "pending") {
+        left = ctlBtn("pause", t.id, "pause", "Pause");
+      }
+      right = ctlBtn("cancel", t.id, "x", "Cancel", true);
     } else if (t.downloadable && isHost() && !t.for_me) {
-      out += actBtn("download", t.id, "Download", "btn btn-soft btn-small", "download");
+      left = ctlBtn("download", t.id, "download", "Download");
     }
-    if (isHost() && t.status === "complete" && t.dest === "local") {
-      out += actBtn("folder", t.id, "Open folder", "btn btn-ghost btn-small", "folder");
-    }
-    if (/^(complete|canceled|rejected|error)$/.test(t.status)) {
-      out += actBtn("delete", t.id, "Delete", "btn btn-ghost btn-small", "trash");
-    }
-    return out;
+    if (!right && terminal) { right = ctlBtn("delete", t.id, "trash", "Delete", true); }
+    return { left: left, right: right };
   }
 
   function updateRow(node, t) {
     var job = uploaderFor(t.id), djob = downloaderFor(t.id);
     var shown = stalledUpload(t) ? "interrupted" : t.status;
-    var state = stateFor(t);
     var live = shown === "uploading" || shown === "downloading";
+    var done = shown === "complete";
+    var bad = /^(error|rejected|canceled)$/.test(shown);
     var sent = t.offset, total = t.size, rate = 0;
     if (job) {
       if (job.sent > sent) { sent = job.sent; }
@@ -1354,68 +1509,53 @@
       rate = watchRate(t.id, t.offset, live);
     }
     if (t.stage === "done") { sent = total; }
-    setCls(node, "row" + (t.for_me && t.offer === "pending" ? " is-incoming" : ""), node.className);
+    var rowCls = "row " + strapFor(t) + (done ? " is-done" : "") +
+                 (t.for_me && t.offer === "pending" ? " is-incoming" : "") +
+                 (S.selected[t.id] ? " is-selected" : "");
+    setCls(node, rowCls, node.className);
     text(firstBy(node, "row-name"), esc(t.name));
-    text(firstBy(node, "row-state"), esc(state[0]));
-    firstBy(node, "row-state").className = "row-state " + state[1];
+    text(firstBy(node, "row-size"), bytes(t.size));
 
     var pct = total ? Math.min(1, sent / total) : 0;
     var bar = firstBy(node, "bar");
     var fill = bar.getElementsByTagName("i")[0];
     var v = "scaleX(" + pct + ")";
     if (fill.style.transform !== v) { fill.style.webkitTransform = v; fill.style.transform = v; }
+    var run = shown === "ready" || (shown === "pending" && !t.for_me);
     bar.className = "bar" + (shown === "paused" || shown === "interrupted" ? " is-paused"
-                          : (shown === "error" || shown === "rejected" ? " is-bad"
-                          : (shown === "complete" ? " is-done"
-                          : (live ? " is-live" : ""))));
+                          : (bad ? " is-bad"
+                          : (done ? " is-done"
+                          : (live ? " is-live" : (run ? " is-run" : "")))));
 
-    var meta = [];
-    meta.push(bytes(t.size));
-    meta.push("<strong>" + esc(t.source_name || "This PC") + '</strong><span class="arrow">\u2192</span><strong>' +
-              esc(t.dest_name || "This PC") + "</strong>");
-    if (job && job.waiting) { meta.push("retrying in " + job.waiting + "s"); }
-    if (djob && djob.waiting) { meta.push("retrying in " + djob.waiting + "s"); }
-    if (t.status === "complete" && t.completed_at) {
-      meta.push(ago(nowSeconds() - t.completed_at));
+    var pctText;
+    if (done) { pctText = ""; }
+    else if (shown === "ready") { pctText = "Ready"; }
+    else if (shown === "pending") {
+      pctText = t.offer === "pending" ? "Waiting"
+              : (t.mine ? "Queued" : "Incoming");
     }
-    text(firstBy(node, "row-meta"), meta.join('<span class="sep">\u00b7</span>'));
+    else if (bad) { pctText = stateFor(t)[0]; }
+    else { pctText = Math.round(pct * 100) + "%"; }
+    text(firstBy(node, "row-pct"), pctText);
 
     var speedEl = firstBy(node, "row-speed");
+    var showSpeed = !done && !bad;
     if (live && rate > 0) {
       var receiving = t.for_me || (!t.mine && t.stage === "download");
-      var left = total - sent;
-      var speedHtml = icon(receiving ? "arrowdown" : "arrowup", 13) + speed(rate);
-      if (left > 0) {
-        var etaText = eta(left / rate);
-        speedHtml += '<span class="eta">' + etaText + " left</span>";
-      }
-      text(speedEl, speedHtml);
-      show(speedEl, true);
+      text(speedEl, icon(receiving ? "arrowdown" : "arrowup", 13) + speed(rate));
+    } else if (showSpeed) {
+      text(speedEl, speed(0));
     } else {
       text(speedEl, "");
-      show(speedEl, false);
     }
+    show(firstBy(node, "c-speed"), showSpeed);
 
-    var hint = "";
-    if (t.mine && t.stage === "upload" && !job &&
-        /^(pending|uploading|paused|interrupted|error)$/.test(t.status)) {
-      hint = "This browser no longer holds a copy of the file (the page was reloaded, " +
-             "or Safari let it go). Nothing already received is repeated: reselect the " +
-             "same file and LocalDrop continues from " + bytes(t.offset) + ".";
-    } else if (t.for_me && t.status === "downloading" && !djob) {
-      hint = "Your browser is downloading this file itself. LocalDrop shows it as " +
-             "delivered once it finishes; pause is available before a download starts.";
-    } else if (t.status === "interrupted" && !t.mine) {
-      hint = esc(t.error || "The sender lost its connection. Their device keeps trying, " +
-                 "and the transfer stays here until it finishes.");
-    } else if (t.status === "error" && t.error) {
-      hint = esc(t.error);
-    }
-    var noteEl = firstBy(node, "row-note");
-    if (hint) { text(noteEl, hint); show(noteEl, true); } else { show(noteEl, false); }
-
-    var actions = firstBy(node, "row-actions"), inner = rowActions(t);
-    if (inner !== actions.lastActs) { actions.lastActs = inner; text(actions, inner); }
+    var chk = firstBy(node, "row-check"), selOn = !!S.selected[t.id];
+    if (chk.checked !== selOn) { chk.checked = selOn; }
+    var ctl = rowControls(t);
+    var leftEl = firstBy(node, "c-ctl"), rightEl = firstBy(node, "c-del");
+    if (ctl.left !== leftEl.lastCtl) { leftEl.lastCtl = ctl.left; text(leftEl, ctl.left); }
+    if (ctl.right !== rightEl.lastCtl) { rightEl.lastCtl = ctl.right; text(rightEl, ctl.right); }
   }
 
   function nowSeconds() { return Math.round(new Date().getTime() / 1000); }
@@ -1494,15 +1634,117 @@
   function decideOffer(action, tid) {
     if (!tid) { return; }
     var row = transferById(tid);
+    if (action === "accept") { autoStart[tid] = 1; }
     callAction(tid, action, {}, function () {
-      if (action === "accept") {
-        note(row && row.status === "ready" ? "Accepted " + row.name + " \u2014 ready to download"
-                                           : "Accepted " + (row ? row.name : "the file"));
-      } else {
-        note("Declined " + (row ? row.name : "the file"));
-      }
+      if (action === "accept") { note("Accepted " + (row ? row.name : "the file")); }
+      else { note("Declined " + (row ? row.name : "the file")); }
       poll(true);
     });
+  }
+
+  // Accepting starts the download as soon as the file is ready, without a second
+  // tap. The flag survives until then, so accepting mid-upload still auto-starts.
+  function runAutoStart() {
+    var i, t;
+    for (i = 0; i < S.transfers.length; i++) {
+      t = S.transfers[i];
+      if (!autoStart[t.id]) { continue; }
+      if (t.status === "rejected" || t.status === "canceled" ||
+          t.status === "error" || t.status === "complete") {
+        delete autoStart[t.id]; continue;
+      }
+      if (t.for_me && t.offer === "accepted" && t.status === "ready" && !downloaderFor(t.id)) {
+        delete autoStart[t.id];
+        startDownload(t.id);
+      }
+    }
+  }
+
+  /* ----------------------------------------------------------- multi-select */
+  function setSelected(tid, on) {
+    if (on) { S.selected[tid] = 1; } else { delete S.selected[tid]; }
+    renderQueue();
+  }
+
+  function selectedIds() {
+    var ids = [], id;
+    for (id in S.selected) { if (S.selected.hasOwnProperty(id)) { ids.push(id); } }
+    return ids;
+  }
+
+  function renderBulk() {
+    var rows = visibleRows(), sel = 0, i, n = selectedIds().length;
+    for (i = 0; i < rows.length; i++) { if (S.selected[rows[i].id]) { sel++; } }
+    show($("bulk-tools"), n > 0);
+    text($("bulk-count"), n + " selected");
+    $("bulk-delete").disabled = n === 0;
+    var allOn = rows.length > 0 && sel === rows.length;
+    $("bulk-all").checked = allOn;
+    $("head-all").checked = allOn;
+  }
+
+  function setAllSelected(on) {
+    var rows = visibleRows(), i;
+    if (on) { for (i = 0; i < rows.length; i++) { S.selected[rows[i].id] = 1; } }
+    else { S.selected = {}; }
+    renderQueue();
+  }
+
+  function deleteSelected() {
+    var ids = selectedIds();
+    if (ids.length) { openDeleteConfirm(ids); }
+  }
+
+  /* ------------------------------------------------------ delete confirmation */
+  var deleteTargets = [];
+
+  function openDeleteConfirm(ids) {
+    if (!ids || !ids.length) { return; }
+    deleteTargets = ids;
+    var n = ids.length, first = transferById(ids[0]);
+    text($("delete-title"), n > 1 ? "Delete " + n + " transfers?" : "Delete transfer?");
+    text($("delete-msg"), n > 1 ? n + " selected transfers"
+                                : esc(first ? first.name : "this transfer"));
+    show($("delete-sheet"), true);
+  }
+
+  function removeTransfers(ids, keepFile) {
+    var i, tid, uj, dj;
+    for (i = 0; i < ids.length; i++) {
+      tid = ids[i]; uj = uploaderFor(tid); dj = downloaderFor(tid);
+      if (uj) { uj.closing = true; if (uj.xhr) { try { uj.xhr.abort(); } catch (e) {} } delete up[tid]; }
+      if (dj) { dj.done = true; if (dj.xhr) { try { dj.xhr.abort(); } catch (e) {} } delete down[tid]; }
+      delete S.selected[tid];
+      callAction(tid, "delete", { keep_file: keepFile });
+    }
+    note((keepFile ? "Removed " : "Deleted ") + ids.length +
+         " transfer" + (ids.length > 1 ? "s" : ""));
+    renderQueue();
+  }
+
+  function doDelete(keepFile) {
+    var ids = deleteTargets;
+    deleteTargets = [];
+    show($("delete-sheet"), false);
+    if (ids.length) { removeTransfers(ids, keepFile); }
+  }
+
+  var cancelTarget = null;
+
+  function openCancelConfirm(tid) {
+    if (!tid) { return; }
+    cancelTarget = tid;
+    var row = transferById(tid);
+    text($("cancel-msg"), esc(row ? row.name : "this transfer"));
+    show($("cancel-sheet"), true);
+  }
+
+  // Cancelling stops the transfer and clears the file and the row everywhere.
+  function doCancel() {
+    var tid = cancelTarget;
+    cancelTarget = null;
+    show($("cancel-sheet"), false);
+    if (tid) { removeTransfers([tid], false); }
   }
 
   /* -------------------------------------------------------- book help panel */
@@ -1542,17 +1784,12 @@
     api("GET", "/api/settings", null, function (err, status, data) {
       if (err) { settingsError("Could not read the settings: " + err); return; }
       settingsCache = data;
-      text($("path-incoming"), esc(data.paths.incoming));
-      text($("path-temp"), esc(data.paths.temp));
-      text($("path-db"), esc(data.paths.database));
-      text($("path-log"), esc(data.paths.log));
       pickOption($("set-chunk"), data.settings.chunk_size, bytes(data.settings.chunk_size) + " (config file)");
       pickOption($("set-poll"), data.settings.poll_interval_ms,
                  (data.settings.poll_interval_ms / 1000) + " s (config file)");
       pickOption($("set-timeout"), data.settings.device_timeout_s,
                  data.settings.device_timeout_s + " s (config file)");
       $("set-autoaccept").checked = !!data.settings.auto_accept;
-      $("set-startup").checked = !!data.settings.start_with_windows;
       $("set-limit").value = String(Math.round((data.settings.max_upload_bytes || 0) / 1048576));
       text($("set-pin"), data.settings.require_pairing ? esc(data.pin) : "Pairing is switched off");
       text($("settings-stats"), (data.stats && data.stats.transfers)
@@ -1575,17 +1812,13 @@
       poll_interval_ms: parseInt($("set-poll").value, 10),
       device_timeout_s: parseInt($("set-timeout").value, 10),
       auto_accept: $("set-autoaccept").checked,
-      start_with_windows: $("set-startup").checked,
       max_upload_bytes: Math.max(0, parseInt($("set-limit").value || "0", 10) || 0) * 1048576
     };
     api("POST", "/api/settings", payload, function (err, status, data) {
       if (err) { settingsError("Could not save: " + err); return; }
       settingsError("");
-      if (data && typeof data.start_with_windows === "boolean") {
-        $("set-startup").checked = data.start_with_windows;
-      }
-      if (data && data.startup_note) { settingsError(data.startup_note); }
-      else { note("Settings saved"); }
+      show($("settings-sheet"), false);
+      note("Settings saved");
       if (data && data.restart_needed) { note("Restart LocalDrop to use the new port."); }
       poll(true);
     });
@@ -1700,14 +1933,6 @@
         text($("set-pin"), esc(data.pin));
       });
     });
-    on($("set-clear"), "click", function () {
-      api("POST", "/api/history/clear", {}, function (err) {
-        if (err) { settingsError("Could not clear: " + err); return; }
-        settingsError("");
-        note("Finished transfers cleared");
-        poll(true);
-      });
-    });
     on($("set-folder"), "click", function () { openFolder(""); });
 
     var closers = document.querySelectorAll("[data-close]"), i;
@@ -1763,8 +1988,36 @@
       }
     });
 
+    on($("mobile-trigger"), "click", function () {
+      if (has($("mpicker"), "hidden")) { openMPicker(); } else { closeMPicker(); }
+    });
+    on($("mpicker-backdrop"), "click", closeMPicker);
+    on($("mpicker-close"), "click", closeMPicker);
+    on($("mpicker-search"), "input", renderMobileList);
+    on($("mpicker-list"), "click", function (e) {
+      var el = e.target;
+      while (el && el !== this && !(el.getAttribute && el.getAttribute("data-device"))) {
+        el = el.parentNode;
+      }
+      if (el && el.getAttribute) {
+        var id = el.getAttribute("data-device");
+        if (id) { chooseTarget(id); closeMPicker(); }
+      }
+    });
+
     on($("queue"), "click", function (e) {
       var el = e.target, act;
+      if (el && el.className && (" " + el.className + " ").indexOf(" row-check ") >= 0) {
+        var rowEl = el;
+        while (rowEl && rowEl !== this && !(rowEl.getAttribute && rowEl.getAttribute("data-tid") && has(rowEl, "row"))) {
+          rowEl = rowEl.parentNode;
+        }
+        if (rowEl && rowEl !== this && rowEl.getAttribute) {
+          var selId = rowEl.getAttribute("data-tid");
+          if (selId) { setSelected(selId, el.checked); }
+        }
+        return;
+      }
       while (el && el !== this && !(el.getAttribute && el.getAttribute("data-act"))) {
         el = el.parentNode;
       }
@@ -1781,22 +2034,24 @@
       }
       else if (act === "download") { startDownload(tid); }
       else if (act === "reselect") { askForFile(tid, row); }
-      else if (act === "cancel") { cancelUpload(tid); }
-      else if (act === "delete") { callAction(tid, "delete", {}); }
+      else if (act === "cancel") { openCancelConfirm(tid); }
+      else if (act === "delete") { openDeleteConfirm([tid]); }
       else if (act === "folder") { openFolder(tid); }
     });
 
-    on($("btn-clear"), "click", function () {
-      if (!isHost()) {
-        note("Clear finished history is in LocalDrop settings on the computer.");
-        return;
-      }
-      api("POST", "/api/history/clear", {}, function (err) {
-        if (err) { note("Could not clear: " + err, true); return; }
-        note("Finished transfers cleared");
-        poll(true);
-      });
+    on($("delete-file"), "click", function () { doDelete(false); });
+    on($("delete-keep"), "click", function () { doDelete(true); });
+    on($("delete-sheet"), "click", function (e) {
+      if (e.target === this) { show(this, false); }
     });
+    on($("cancel-confirm"), "click", doCancel);
+    on($("cancel-keep"), "click", function () { show($("cancel-sheet"), false); });
+    on($("cancel-sheet"), "click", function (e) {
+      if (e.target === this) { show(this, false); }
+    });
+    on($("bulk-delete"), "click", deleteSelected);
+    on($("bulk-all"), "change", function () { setAllSelected(this.checked); });
+    on($("head-all"), "change", function () { setAllSelected(this.checked); });
 
     on(window, "online", function () {
       S.reachable = false;
@@ -1814,6 +2069,10 @@
       if (e && (e.keyCode === 27)) {
         show($("qr-sheet"), false);
         show($("settings-sheet"), false);
+        show($("delete-sheet"), false);
+        show($("cancel-sheet"), false);
+        closeMPicker();
+        if (selectedIds().length) { S.selected = {}; renderQueue(); }
       }
     };
   }

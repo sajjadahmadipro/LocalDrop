@@ -209,7 +209,6 @@ POST_IOS9_APIS = [
     ("fetch", re.compile(r"\bfetch\s*\(")),
     ("Promise", re.compile(r"\bPromise\b")),
     ("WebSocket", re.compile(r"\bWebSocket\b")),
-    ("service worker", re.compile(r"serviceWorker")),
     ("clipboard API", re.compile(r"navigator\.clipboard")),
     ("Web Share", re.compile(r"navigator\.share\b")),
     ("IndexedDB", re.compile(r"\bindexedDB\b")),
@@ -315,7 +314,7 @@ class JavaScriptSyntaxAudit(unittest.TestCase):
                       "spread or rest (...)"):
             self.assertIn(label, syntax)
         apis = [label for label, pattern in POST_IOS9_APIS if pattern.search(code)]
-        for label in ("fetch", "Promise", "service worker", "Object.assign",
+        for label in ("fetch", "Promise", "Object.assign",
                       "Array.includes/find"):
             self.assertIn(label, apis)
         self.assertIn("template literal at line 8", findings)
@@ -326,6 +325,19 @@ class JavaScriptSyntaxAudit(unittest.TestCase):
     def test_file_slice_has_the_webkit_fallback(self):
         self.assertRegex(self.source, r"File\.prototype\.slice|\.slice\s*\|\|\s*\w*\.webkitSlice")
         self.assertIn("webkitSlice", self.source)
+
+    def test_service_worker_registration_is_guarded(self):
+        # navigator.serviceWorker is undefined on old Safari, so any unguarded
+        # touch would throw. The PWA install path is the one allowed use: the
+        # feature check and the register call, nothing else.
+        code, _, _ = strip_javascript(self.source)
+        lines = [ln for ln in code.splitlines() if "serviceWorker" in ln]
+        self.assertTrue(lines, "the guarded service worker registration vanished")
+        for ln in lines:
+            self.assertRegex(
+                ln,
+                r"if \(!navigator\.serviceWorker\) \{ return; \}"
+                r"|try \{ navigator\.serviceWorker\.register\(BASE")
 
     def test_touch_probe_leads_with_ontouchstart(self):
         # maxTouchPoints is undefined on old Safari; the order is what makes
