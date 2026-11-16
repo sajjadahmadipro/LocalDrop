@@ -3,6 +3,7 @@
 import copy
 import json
 import os
+import sys
 import threading
 
 DEFAULTS = {
@@ -59,6 +60,10 @@ def default_data_dir():
 
 
 def project_root():
+    if getattr(sys, "frozen", False):
+        # A frozen exe has no package tree on disk: keep the data folder next to
+        # it so the exe stays portable (move it, the data moves with nothing else).
+        return os.path.dirname(os.path.abspath(sys.executable))
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 

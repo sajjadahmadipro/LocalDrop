@@ -17,6 +17,9 @@ def supported():
 
 def command():
     """Command line that reopens the launcher, iconified, with the server up."""
+    if getattr(sys, "frozen", False):
+        exe = sys.executable or ""
+        return '"%s" --minimized --start' % exe if exe and os.path.exists(exe) else ""
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "launcher.py")
     exe = sys.executable or ""
     head, tail = os.path.split(exe)

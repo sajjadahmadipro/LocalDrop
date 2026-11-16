@@ -6,6 +6,7 @@ tests without a socket. Bodies are read as streams and never buffered whole.
 
 import json
 import os
+import sys
 import time
 
 from . import config as config_module
@@ -14,7 +15,9 @@ from .devices import LOCAL, DeviceRegistry
 from .transfers import TransferError, TransferStore
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-WEB_DIR = os.path.join(os.path.dirname(APP_DIR), "web")
+# A frozen build carries web/ at the bundle root (sys._MEIPASS); a source run
+# keeps it beside the localdrop package.
+WEB_DIR = os.path.join(getattr(sys, "_MEIPASS", os.path.dirname(APP_DIR)), "web")
 STATIC_FILES = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/index.html": ("index.html", "text/html; charset=utf-8"),
