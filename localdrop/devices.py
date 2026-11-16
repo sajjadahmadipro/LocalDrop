@@ -78,7 +78,24 @@ class DeviceRegistry(object):
             remote=remote or "",
             extras={"ua_kind": kind},
         )
+        if role != "host":
+            self._supersede_stale(kind, remote or "")
         return device, token
+
+    def _supersede_stale(self, kind, remote):
+        """Every pairing creates a fresh device id, so re-pairing the same
+        gadget would pile up dead rows. An offline device seen before from the
+        same address and kind is an earlier pairing of this one: retire it."""
+        if not remote:
+            return
+        for row in self.store.devices():
+            if row["role"] != "remote" or row["kind"] != kind:
+                continue
+            if not row.get("paired") or row["remote"] != remote:
+                continue
+            if self.online(row):
+                continue
+            self.store.upsert_device(row["id"], paired=0)
 
     def authenticate(self, token):
         if not token:
@@ -137,7 +154,11 @@ class DeviceRegistry(object):
 
     def devices(self, now=None):
         now = time.time() if now is None else now
-        rows = [d for d in self.store.devices() if d["id"] != LOCAL]
+        # The host PC is represented only by LOCAL; host-role session devices are
+        # stale duplicates of it and must not appear as send targets. Unpaired
+        # rows are retired pairings, not real devices.
+        rows = [d for d in self.store.devices()
+                if d["id"] != LOCAL and d["role"] != "host" and d.get("paired")]
         local = self.store.device(LOCAL)
         out = [self.view(local, now)] if local else []
         out.extend(self.view(d, now) for d in rows)

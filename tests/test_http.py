@@ -232,23 +232,6 @@ class LargeTransferTest(HttpCase):
                                          token=ipad_token, conn=conn)
         self.assertEqual(body["offer"], "accepted")
 
-        status, data, response, conn = self.call("GET", "/api/transfers/%s/data" % tid,
-                                                token=ipad_token, conn=conn)
-        self.assertEqual(status, 200)
-        self.assertEqual(len(data), len(payload))
-        self.assertEqual(data, payload)
-        self.assertEqual(response.getheader("Accept-Ranges"), "bytes")
-
-        # A resumed download: Safari asks for the tail.
-        tail_from = 2 * 1024 * 1024
-        status, data, response, conn = self.call(
-            "GET", "/api/transfers/%s/data" % tid, token=ipad_token, conn=conn,
-            headers={"Range": "bytes=%d-" % tail_from})
-        self.assertEqual(status, 206)
-        self.assertEqual(data, payload[tail_from:])
-        self.assertEqual(response.getheader("Content-Range"),
-                         "bytes %d-%d/%d" % (tail_from, len(payload) - 1, len(payload)))
-
         # HEAD gives Safari the size before it commits to the download.
         status, data, response, _ = self.call("HEAD", "/api/transfers/%s/data" % tid,
                                              token=ipad_token)
@@ -256,11 +239,34 @@ class LargeTransferTest(HttpCase):
         self.assertEqual(data, b"")
         self.assertEqual(int(response.getheader("Content-Length")), len(payload))
 
-        # The full GET delivered everything, so the transfer is complete.
+        # A resumed download: Safari pulls ranges. The first pull stops short of
+        # the end so the server copy still exists for the tail request.
+        half = len(payload) // 2
+        status, data, response, conn = self.call(
+            "GET", "/api/transfers/%s/data" % tid, token=ipad_token, conn=conn,
+            headers={"Range": "bytes=0-%d" % (half - 1)})
+        self.assertEqual(status, 206)
+        self.assertEqual(data, payload[:half])
+        self.assertEqual(response.getheader("Accept-Ranges"), "bytes")
+        self.assertEqual(response.getheader("Content-Range"),
+                         "bytes 0-%d/%d" % (half - 1, len(payload)))
+        status, data, response, conn = self.call(
+            "GET", "/api/transfers/%s/data" % tid, token=ipad_token, conn=conn,
+            headers={"Range": "bytes=%d-" % half})
+        self.assertEqual(status, 206)
+        self.assertEqual(data, payload[half:])
+        self.assertEqual(response.getheader("Content-Range"),
+                         "bytes %d-%d/%d" % (half, len(payload) - 1, len(payload)))
+
+        # Every byte went out, so the transfer is complete and the server has
+        # dropped its staged copy: sending a file must not park it on the PC.
         status, body, _, _ = self.call("GET", "/api/transfers/%s/status" % tid,
-                                       token=ipad_token, conn=conn)
+                                       token=ipad_token)
         self.assertEqual(body["status"], "complete")
         self.assertEqual(body["transfer"]["downloaded"], len(payload))
+        self.assertFalse(os.path.exists(os.path.join(self.h.config.incoming, "video.mp4")),
+                         "the relay copy must be dropped once delivered")
+        self.assertFalse(body["transfer"]["downloadable"])
 
     def test_concurrent_uploads_finish_with_correct_bytes(self):
         host_token, _ = self.host_token()
@@ -389,6 +395,8 @@ class InterruptionTest(HttpCase):
         self.assertEqual(status, 200)
         self.assertEqual(data, payload)
         conn2.close()
+        self.assertFalse(os.path.exists(os.path.join(self.h.config.incoming, "abort.mp4")),
+                         "delivered means the server copy is gone")
 
 
 class RestartTest(HttpCase):

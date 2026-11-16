@@ -434,6 +434,20 @@ class ControlTest(unittest.TestCase):
         self.h.request("POST", "/api/transfers/%s/delete" % tid, token=self.token)
         self.assertFalse(os.path.exists(path))
 
+    def test_delete_keep_file_removes_the_row_but_keeps_the_file(self):
+        payload = b"keep me on disk"
+        tid, _ = self.h.create(self.token, "keep.txt", payload)
+        self.h.upload(self.token, tid, payload)
+        self.h.request("POST", "/api/transfers/%s/finalize" % tid, token=self.token)
+        path = os.path.join(self.h.config.incoming, "keep.txt")
+        self.assertTrue(os.path.exists(path))
+        status, _, _ = self.h.request("POST", "/api/transfers/%s/delete" % tid,
+                                      body={"keep_file": True}, token=self.token)
+        self.assertEqual(status, 200)
+        self.assertTrue(os.path.exists(path), "remove from list must keep the stored file")
+        status, body, _ = self.h.request("GET", "/api/transfers", token=self.token)
+        self.assertNotIn(tid, [t["id"] for t in body["transfers"]])
+
     def test_rebind_needs_the_identical_file(self):
         payload = os.urandom(2048)
         tid, _ = self.h.create(self.token, "resume-me.bin", payload)
@@ -578,6 +592,62 @@ class DeviceToDeviceTest(unittest.TestCase):
         self.assertTrue(row["for_me"])
         self.assertEqual(row["source_name"], "This PC")
         self.assertFalse(row["downloadable"], "not downloadable before accepting")
+
+    def test_host_sees_an_incoming_offer_for_files_sent_to_the_pc(self):
+        payload = b"sent to the computer"
+        tid, _ = self.h.create(self.ipad_token, "to-pc.txt", payload, dest=LOCAL)
+        self.h.upload(self.ipad_token, tid, payload)
+        status, body, _ = self.h.request("POST", "/api/transfers/%s/finalize" % tid,
+                                        token=self.ipad_token)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["status"], "complete")
+        status, body, _ = self.h.request("GET", "/api/state", token=self.host_token,
+                                        device=self.host_device)
+        row = [t for t in body["transfers"] if t["id"] == tid][0]
+        self.assertEqual(row["offer"], "pending")
+        self.assertTrue(row["for_me"], "the host receives files addressed to LOCAL")
+        self.assertFalse(row["mine"])
+        self.assertFalse(row["downloadable"], "the inbox copy is not a browser download")
+        status, body, _ = self.h.request("POST", "/api/transfers/%s/accept" % tid,
+                                        token=self.host_token, device=self.host_device)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["offer"], "accepted")
+
+    def test_host_is_not_prompted_to_accept_its_own_send_to_the_pc(self):
+        payload = b"my own file"
+        tid, _ = self.h.create(self.host_token, "self.txt", payload, dest=LOCAL)
+        self.h.upload(self.host_token, tid, payload)
+        self.h.request("POST", "/api/transfers/%s/finalize" % tid, token=self.host_token)
+        status, body, _ = self.h.request("GET", "/api/state", token=self.host_token,
+                                        device=self.host_device)
+        row = [t for t in body["transfers"] if t["id"] == tid][0]
+        self.assertTrue(row["mine"])
+        self.assertFalse(row["for_me"], "a self-send is not an incoming offer")
+
+    def test_host_cannot_see_or_download_traffic_between_two_devices(self):
+        phone_token, phone = self.h.pair(name="Phone", ip="192.168.1.77")
+        payload = b"private between phone and ipad"
+        tid, _ = self.h.create(phone_token, "secret.txt", payload, dest=self.ipad_device)
+        self.h.upload(phone_token, tid, payload)
+        self.h.request("POST", "/api/transfers/%s/finalize" % tid, token=phone_token)
+        self.h.request("POST", "/api/transfers/%s/accept" % tid, token=self.ipad_token,
+                      device=self.ipad_device)
+        status, body, _ = self.h.request("GET", "/api/state", token=self.host_token,
+                                        device=self.host_device)
+        self.assertNotIn(tid, [t["id"] for t in body["transfers"]],
+                         "the host must not see device-to-device traffic")
+        status, body, _ = self.h.request("GET", "/api/transfers/%s/data" % tid,
+                                        token=self.host_token, device=self.host_device)
+        self.assertEqual(status, 403, "the host must not download device-to-device files")
+
+    def test_sender_can_download_back_a_finished_file(self):
+        tid, payload = self.send_to_ipad()
+        self.h.request("POST", "/api/transfers/%s/accept" % tid, token=self.ipad_token,
+                      device=self.ipad_device)
+        status, data, _ = self.h.request("GET", "/api/transfers/%s/data" % tid,
+                                        token=self.host_token, device=self.host_device)
+        self.assertEqual(status, 200, "the sender may open its own finished file")
+        self.assertEqual(data, payload)
 
 
 class DownloadTest(unittest.TestCase):

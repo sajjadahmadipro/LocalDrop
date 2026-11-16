@@ -289,13 +289,15 @@ class Application(object):
         role = device["role"]
         now = time.time()
         records = self.transfers.visible(self.store.transfers(), role, device["id"])
-        views = self.transfers.views(records, device["id"])
+        views = self.transfers.views(records, device["id"], role)
         payload = {
             "ok": True,
             "now": round(now, 2),
             "server": {
                 "version": _version(),
-                "url": self.access_url(client_host),
+                # Always advertise the address another device should type, never
+                # the Host header of the asking browser (localhost on the PC).
+                "url": self.access_url(),
                 "addresses": netinfo.lan_addresses(),
                 "port": self.port(),
                 "chunk_size": int(self.config.get("chunk_size")),
@@ -327,7 +329,7 @@ class Application(object):
         return Response.json(payload)
 
     def _qr(self, client_host=None):
-        url = self.access_url(client_host)
+        url = self.access_url()
         symbol = qr.encode(url, level="M")
         return Response(status=200, body=symbol.to_svg(scale=6, quiet=3),
                         content_type="image/svg+xml")
@@ -338,7 +340,7 @@ class Application(object):
         if path == "/api/transfers" and method == "GET":
             records = self.transfers.visible(self.store.transfers(), role, viewer_id)
             return Response.json({"ok": True,
-                                  "transfers": self.transfers.views(records, viewer_id)})
+                                  "transfers": self.transfers.views(records, viewer_id, role)})
         if path == "/api/transfers" and method == "POST":
             payload = _json_body(body, headers)
             dest = str(payload.get("dest", ""))
@@ -399,14 +401,14 @@ class Application(object):
         if action == "status":
             if method != "GET":
                 return Response.error("use GET", 405)
-            return Response.json({"ok": True, "transfer": self.transfers.view(record, viewer_id),
+            return Response.json({"ok": True, "transfer": self.transfers.view(record, viewer_id, viewer_role=role),
                                   "offset": record["offset"], "size": record["size"],
                                   "status": record["status"]})
         if method != "POST":
             return Response.error("use POST", 405)
         if action == "finalize":
             updated = self.transfers.finalize(transfer_id)
-            return Response.json({"ok": True, "transfer": self.transfers.view(updated, viewer_id),
+            return Response.json({"ok": True, "transfer": self.transfers.view(updated, viewer_id, viewer_role=role),
                                   "sha256": updated["sha256"], "status": updated["status"]})
         if action == "pause":
             return Response.json({"ok": True, "status": self.transfers.pause(transfer_id)["status"]})
@@ -417,7 +419,13 @@ class Application(object):
         if action == "cancel":
             return Response.json({"ok": True, "status": self.transfers.cancel(transfer_id)["status"]})
         if action == "delete":
-            self.transfers.delete(transfer_id)
+            try:
+                payload = _json_body(body, headers)
+            except ValueError:
+                payload = {}
+            # "Remove from list" keeps the stored file; "Delete file" removes it.
+            keep_file = bool(payload.get("keep_file"))
+            self.transfers.delete(transfer_id, remove_files=not keep_file)
             return Response.json({"ok": True, "deleted": transfer_id})
         if action in ("accept", "reject"):
             if record["dest"] != viewer_id and role != "host":
@@ -439,7 +447,15 @@ class Application(object):
     # -- file serving --------------------------------------------------
     def _serve_file(self, record, device, query, headers, method, loopback):
         viewer_id = device["id"]
-        if record["dest"] != viewer_id and device["role"] != "host":
+        # A party to the transfer (sender or receiver) may read it; the host may
+        # also read anything involving the PC, but not traffic between two other
+        # devices. PC endpoints are matched by role so a relaunch (new host session
+        # id) can still open its own earlier sends.
+        allowed = record["dest"] == viewer_id or record["source"] == viewer_id
+        if device["role"] == "host" and (self.transfers._is_pc(record["dest"])
+                                         or self.transfers._is_pc(record["source"])):
+            allowed = True
+        if not allowed:
             return Response.error("not your file", 403)
         target, path = self.transfers.download_target(record["id"], viewer_id)
         size = os.path.getsize(path)

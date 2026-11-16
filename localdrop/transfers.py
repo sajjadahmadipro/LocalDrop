@@ -91,7 +91,7 @@ class TransferStore(object):
         tid = security.new_transfer_id()
         now = time.time()
         auto = bool(self.config.get("auto_accept"))
-        offer = "accepted" if (auto or dest == LOCAL) else "pending"
+        offer = "accepted" if auto else "pending"
         record = self.store.insert_transfer({
             "id": tid,
             "filename": name,
@@ -384,9 +384,25 @@ class TransferStore(object):
             fields.update({"status": "complete", "completed_at": time.time(),
                            "offer": "accepted"})
             self._log("transfer %s delivered to %s", transfer_id, record["dest"])
-            self.store.update_transfer(transfer_id, **fields)
+            record = self.store.update_transfer(transfer_id, **fields)
+            if record["dest"] != LOCAL:
+                self._drop_relay_copy(transfer_id)
             return self.get(transfer_id)
         return self.store.update_transfer(transfer_id, **fields)
+
+    def _drop_relay_copy(self, transfer_id):
+        """The staged copy exists only so the destination can pull; once every
+        byte went out the server must not keep it. A copy still held open by the
+        stream (Windows lock) is left for sweep() to retry."""
+        record = self.get(transfer_id)
+        stored = record.get("stored_path") or ""
+        if not stored:
+            return
+        try:
+            os.remove(stored)
+        except OSError:
+            return
+        self.store.update_transfer(transfer_id, stored_path="")
 
     # -- housekeeping --------------------------------------------------
     def reconcile(self):
@@ -411,6 +427,8 @@ class TransferStore(object):
                 changed.append(self.store.update_transfer(tid, **fields))
             elif record["status"] in ("canceled", "rejected"):
                 continue
+            elif record["status"] == "complete" and record["dest"] != LOCAL:
+                continue  # delivered: the staged copy was dropped on purpose
             elif has_partial and not stored:
                 changed.append(self.store.update_transfer(
                     tid, offset=os.path.getsize(partial)))
@@ -448,22 +466,37 @@ class TransferStore(object):
             elif status == "downloading" and now - record["updated_at"] > 90:
                 interrupted.append(self.store.update_transfer(
                     record["id"], status="ready", error=""))
+            elif status == "complete" and record["dest"] != LOCAL \
+                    and record.get("stored_path"):
+                self._drop_relay_copy(record["id"])
         return expired, interrupted
 
+    def _is_pc(self, device_id):
+        """The PC is LOCAL plus any host-role session device. Host session ids are
+        ephemeral (a relaunch re-pairs with a new id), so role, not id, marks a send
+        as originating from this machine."""
+        if device_id == LOCAL:
+            return True
+        device = self.store.device(device_id)
+        return bool(device) and device.get("role") == "host"
+
     def visible(self, records, viewer_role, viewer_id):
-        """Only expose transfers that involve the asking device (the host sees all)."""
+        """Only expose transfers that involve the asking device. The host sees its
+        own sends and the PC inbox, but never traffic between two other devices."""
         if viewer_role == "host":
-            return records
+            return [r for r in records
+                    if r["source"] == viewer_id or r["dest"] == viewer_id
+                    or self._is_pc(r["source"]) or self._is_pc(r["dest"])]
         return [r for r in records
                 if r["source"] == viewer_id or r["dest"] == viewer_id]
 
-    def views(self, records, viewer_id=None):
+    def views(self, records, viewer_id=None, viewer_role=None):
         names = {LOCAL: (self.registry.local_device() or {}).get("name", "This PC")}
         for device in self.registry.store.devices():
             names[device["id"]] = device["name"]
-        return [self.view(record, viewer_id, names) for record in records]
+        return [self.view(record, viewer_id, names, viewer_role) for record in records]
 
-    def view(self, record, viewer_id=None, names=None):
+    def view(self, record, viewer_id=None, names=None, viewer_role=None):
         if names is None:
             names = {LOCAL: (self.registry.local_device() or {}).get("name", "This PC")}
             for device in self.registry.store.devices():
@@ -472,13 +505,23 @@ class TransferStore(object):
         size = int(record["size"]) or 1
         uploaded = int(record["offset"])
         downloaded = int(record.get("dl_bytes") or 0)
+        mine = bool(viewer_id and record["source"] == viewer_id)
+        for_me = bool(viewer_id and record["dest"] == viewer_id)
+        # Stage follows the viewer, not the wire status: the sender still owns
+        # its send while the receiver pulls, so ready/downloading must not
+        # turn the source device's row into a download row.
         held_file = status == "paused" and bool(record.get("stored_path"))
-        if status in ("ready", "downloading") or held_file:
-            stage, confirmed = "download", downloaded
-        elif status == "complete":
+        if status == "complete":
             stage, confirmed = "done", size
+        elif status in ("ready", "downloading") or held_file:
+            stage, confirmed = ("upload" if mine else "download"), downloaded
         else:
             stage, confirmed = "upload", uploaded
+        # The host PC receives files addressed to LOCAL, but never prompts to
+        # accept its own sends: the source guard keeps self-sends out of offers.
+        if not for_me and viewer_role == "host" and record["dest"] == LOCAL \
+                and record["source"] != viewer_id:
+            for_me = True
         return {
             "id": record["id"],
             "name": record["filename"],
@@ -495,8 +538,8 @@ class TransferStore(object):
             "dest": record["dest"],
             "source_name": names.get(record["source"], "Another device"),
             "dest_name": names.get(record["dest"], "This PC" if record["dest"] == LOCAL else ""),
-            "mine": bool(viewer_id and record["source"] == viewer_id),
-            "for_me": bool(viewer_id and record["dest"] == viewer_id),
+            "mine": mine,
+            "for_me": for_me,
             "created_at": round(record["created_at"], 2),
             "updated_at": round(record["updated_at"], 2),
             "completed_at": round(record.get("completed_at") or 0, 2),
@@ -504,7 +547,8 @@ class TransferStore(object):
             "error": record["error"],
             "chunk_size": record["chunk_size"],
             "downloadable": status in ("ready", "downloading", "complete")
-                            and record["dest"] != LOCAL and record["offer"] != "pending",
+                            and record["dest"] != LOCAL and record["offer"] != "pending"
+                            and bool(record.get("stored_path")),
             "on_disk": bool(record.get("stored_path")),
         }
 
