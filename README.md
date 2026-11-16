@@ -36,6 +36,7 @@ worker.
 15. [Tests](#tests)
 16. [Troubleshooting](#troubleshooting)
 17. [What LocalDrop deliberately does not do](#what-localdrop-does-not-do)
+18. [License](#license)
 
 ---
 
@@ -692,3 +693,11 @@ multi-PC mesh, no macOS/Android-specific client app, no tray icon, and no
 background service after the window closes. Each of those is either impossible
 on iOS 9 Safari, needs a certificate trust dance, or would mean LocalDrop
 quietly doing something you did not ask it to.
+
+---
+
+## License
+
+[MIT](LICENSE) — anyone may use, modify and redistribute LocalDrop, including
+commercially, as long as the copyright notice travels with it. The software
+comes with no warranty; see [LICENSE](LICENSE) for the full text.
