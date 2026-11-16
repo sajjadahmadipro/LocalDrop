@@ -18,6 +18,7 @@ from . import logging_util
 from .app import Application, Response
 
 READ_BLOCK = 524288
+DL_NOTE_BLOCK = 4194304     # note download progress every 4 MB so rows stay live
 SECURITY_HEADERS = (
     ("X-Content-Type-Options", "nosniff"),
     ("X-Frame-Options", "SAMEORIGIN"),
@@ -230,6 +231,7 @@ class Handler(socketserver.StreamRequestHandler):
         if length <= 0:
             return
         delivered = 0
+        noted = 0          # bytes already recorded in the transfer row
         handle = None
         try:
             handle = open(path, "rb")
@@ -244,6 +246,11 @@ class Handler(socketserver.StreamRequestHandler):
                 self.wfile.flush()
                 delivered += len(block)
                 remaining -= len(block)
+                # Record progress while the browser is still pulling, so the
+                # receiving row can show a live bar instead of freezing.
+                if delivered - noted >= DL_NOTE_BLOCK:
+                    self._note_download(response, start + delivered)
+                    noted = delivered
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, OSError) as exc:
             self.keep_alive = False
@@ -252,12 +259,17 @@ class Handler(socketserver.StreamRequestHandler):
         finally:
             if handle is not None:
                 handle.close()
+        if delivered - noted > 0:
+            self._note_download(response, start + delivered)
+
+    def _note_download(self, response, last_byte):
         transfer_id = getattr(response, "transfer_id", None)
-        if transfer_id and delivered:
-            try:
-                self.app.transfers.note_download(transfer_id, start + delivered)
-            except Exception as exc:
-                self.app.note("error", "could not record download progress: %s", exc)
+        if not transfer_id:
+            return
+        try:
+            self.app.transfers.note_download(transfer_id, last_byte)
+        except Exception as exc:
+            self.app.note("error", "could not record download progress: %s", exc)
 
     def _close_stream(self):
         try:
