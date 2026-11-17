@@ -134,19 +134,12 @@
         </div>
       </section>
 
-      <section class="panel books hidden" id="books-panel">
-        <div class="panel-head"><h2>Open a book on this device</h2></div>
-        <ol class="steps" id="books-steps">
-          <li>Tap <strong>Download</strong> on the transfer below.</li>
-          <li>Wait for Safari to finish and show the document.</li>
-          <li>Tap the <strong>Share / Open in Books</strong> button, then choose <strong>Books</strong>.</li>
-        </ol>
-        <p class="hint" id="books-hint">EPUB and PDF arrive ready for Books. Other formats open in whichever app can handle them &mdash; that choice belongs to the device, not to LocalDrop.</p>
-      </section>
-
     </div>
+  </main>
 
-    <aside class="rail" aria-label="Reachable devices and network address">
+  <!-- iOS 9 drops a fixed element nested inside another fixed element with
+       overflow: hidden, so the rail must live outside the wrap. -->
+  <aside class="rail" aria-label="Reachable devices and network address">
       <div class="rail-brand">
         <span class="brandmark" aria-hidden="true">
           <svg viewBox="0 0 48 48" width="30" height="30"><defs><linearGradient id="ldgRail" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3282b8"/><stop offset="1" stop-color="#0f4c75"/></linearGradient></defs><rect x="2" y="2" width="44" height="44" rx="13" fill="url(#ldgRail)"/><path d="M24 7C24 7 15.5 17 15.5 22.5A8.5 8.5 0 0 0 32.5 22.5C32.5 17 24 7 24 7Z" fill="#fff"/><path d="M17.5 35.5Q24 39.3 30.5 35.5" fill="none" stroke="#dceefb" stroke-width="2.3" stroke-linecap="round"/><path d="M13.5 39.8Q24 45 34.5 39.8" fill="none" stroke="#bbe1fa" stroke-width="2.3" stroke-linecap="round" opacity="0.8"/></svg>
@@ -170,7 +163,6 @@
         </div>
       </div>
     </aside>
-  </main>
 
   <div class="mobile-bar" id="mobile-bar">
     <button type="button" class="mobile-trigger" id="mobile-trigger" aria-haspopup="listbox" aria-expanded="false">

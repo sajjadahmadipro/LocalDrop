@@ -2,7 +2,7 @@
    Caches only the fixed app shell; every /api/ call and file download stays
    live so transfers are never served from a stale cache. Written in ES5 to
    match the rest of the web folder. */
-var CACHE = "localdrop-shell-v3";
+var CACHE = "localdrop-shell-v5";
 var SHELL = ["/", "/app.css", "/app.js", "/icon.svg", "/manifest.json",
              "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png"];
 

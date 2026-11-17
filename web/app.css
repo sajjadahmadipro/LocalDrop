@@ -146,7 +146,7 @@ body.dark .pair-error { color: #f0857d; }
 .pair-card .hint { margin-top: 14px; }
 
 /* ------------------------------------------------------------- topbar */
-.topbar { background: #fff; border-bottom: 1px solid #d3e2ee; position: fixed; top: 0; left: 300px; right: 0; z-index: 30; }
+.topbar { background: #fff; border-bottom: 1px solid #d3e2ee; position: fixed; top: 0; left: 300px; right: 0; z-index: 30; -webkit-transform: translateZ(0); transform: translateZ(0); }
 body.dark .topbar { background: #1b262c; border-color: #2a3a44; }
 .topbar-inner { padding: 12px 24px; }
 .topbar-inner:after { content: ""; display: table; clear: both; }
@@ -180,7 +180,6 @@ body.ready { overflow: hidden; }
 .wrap:after { content: ""; display: table; clear: both; }
 .main-col { position: relative; height: 100%; max-width: none; margin: 0; }
 #send-panel { position: absolute; top: 0; left: 0; right: 0; bottom: 0; margin: 0; overflow: hidden; border: 0; border-radius: 0; box-shadow: none; }
-#books-panel { position: absolute; left: 0; right: 0; bottom: 0; margin: 0; }
 .queue-scroll {
   position: absolute; left: 0; right: 0; top: 0; bottom: 0;
   padding: 0 18px 18px; overflow-y: auto; -webkit-overflow-scrolling: touch;
@@ -197,6 +196,9 @@ body.dark .queue-scroll::-webkit-scrollbar-thumb:hover { background: #bbe1fa; }
 .rail {
   position: fixed; top: 0; left: 0; bottom: 0; width: 300px; z-index: 20;
   background: #fff; border-right: 1px solid #d3e2ee;
+  /* iOS 9 renders fixed elements blank when they share a compositing layer
+     with a touch-scrolling child; an own layer keeps the rail on screen. */
+  -webkit-transform: translateZ(0); transform: translateZ(0);
 }
 body.dark .rail { background: #1b262c; border-color: #2a3a44; }
 .rail-brand {
@@ -220,7 +222,10 @@ body.dark .rail-search-input { background: #10181e; border-color: #33475a; color
 body.dark .rail-search-input:focus { border-color: #bbe1fa; }
 .rail-devices {
   position: absolute; top: 131px; left: 0; right: 0; bottom: 68px;
-  overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 12px 16px;
+  /* No touch-momentum here: an inner touch scroller is the other half of the
+     iOS 9 pattern that blanks fixed elements, and the rail scrolls fine
+     without it. */
+  overflow-y: auto; padding: 12px 16px;
 }
 .rail-foot {
   position: absolute; left: 0; right: 0; bottom: 0; height: 68px;
@@ -239,6 +244,7 @@ body.dark .rail-foot { background: #16202a; border-color: #2a3a44; }
   display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
   background: #fff; border-top: 1px solid #d3e2ee; padding: 10px 14px;
   box-shadow: 0 -4px 16px rgba(27,38,44,.06);
+  -webkit-transform: translateZ(0); transform: translateZ(0);
 }
 body.dark .mobile-bar { background: #1b262c; border-color: #2a3a44; box-shadow: none; }
 .mobile-trigger {
@@ -572,10 +578,6 @@ body.dark .delete-msg { color: #e8f1f8; }
 .row.is-selected { border-color: #0f4c75; box-shadow: 0 0 0 3px rgba(15,76,117,.12); }
 body.dark .row.is-selected { border-color: #3282b8; box-shadow: 0 0 0 3px rgba(50,130,184,.15); }
 
-/* ------------------------------------------------------------- books */
-.steps { margin: 4px 0 12px 20px; font-size: 13.5px; }
-.steps li { margin-bottom: 6px; }
-
 /* ------------------------------------------------------------- notifications */
 .notif-stack {
   position: fixed; top: 78px; right: 20px; z-index: 120; width: 344px; max-width: 90%;
@@ -714,7 +716,7 @@ body.dark .toast.is-bad { background: #f0857d; color: #2a1210; }
 }
 
 /* ------------------------------------------------------------- mobile */
-@media (max-width: 767px) {
+@media (max-width: 849px) {
   body { font-size: 15px; }
   body.ready { overflow: visible; }
   .topbar { position: relative; left: 0; }
@@ -726,7 +728,6 @@ body.dark .toast.is-bad { background: #f0857d; color: #2a1210; }
   .main-col { position: static; height: auto; max-width: none; margin: 0; }
   #send-panel { position: static; margin: 0 0 16px; overflow: visible; border: 1px solid #d3e2ee; border-radius: 14px; }
   body.dark #send-panel { border-color: #2a3a44; }
-  #books-panel { position: static; margin: 0 0 16px; }
   .queue-scroll { position: static; padding: 0; overflow: visible; }
   .rail { display: none; }
   .mobile-bar { display: block; }
@@ -742,7 +743,7 @@ body.dark .toast.is-bad { background: #f0857d; color: #2a1210; }
   .drop-action .file-btn { display: inline-block; width: auto; min-width: 200px; min-height: 48px; }
   .drop-hint { position: static; margin: 16px 0 0; text-align: center; }
   .panel-sub { float: none; display: block; margin-top: 3px; }
-  .drop-send { display: block; margin-top: 16px; text-align: center; }
+  .drop-send { display: block; width: auto; margin-top: 16px; text-align: center; }
   .drop-send .btn-primary { width: 100%; min-height: 50px; font-size: 15.5px; }
   .drop-send .btn-ghost { display: block; width: 100%; margin: 8px 0 0; }
   .set-cols { display: block; }

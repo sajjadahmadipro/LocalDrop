@@ -1017,15 +1017,12 @@
 
   // The desktop shell never scrolls: the transfer list is the only scroll
   // region. Its top edge is measured from the live position of the Transfers
-  // heading (the drop zone and picked-files block above it change height), and
-  // the send panel lifts to make room for the Books help card when it docks.
+  // heading (the drop zone and picked-files block above it change height).
   function layout() {
     if (S.screen !== "app") { return; }
     var panel = $("send-panel"), head = $("transfers-head"),
-        scroll = $("queue-scroll"), books = $("books-panel");
+        scroll = $("queue-scroll");
     if (!panel || !head || !scroll) { return; }
-    var booksH = (books && !has(books, "hidden")) ? books.offsetHeight + 12 : 0;
-    panel.style.bottom = booksH + "px";
     scroll.style.top = (head.offsetTop + head.offsetHeight + 10) + "px";
   }
 
@@ -1040,7 +1037,6 @@
     renderPicked();
     renderOffers();
     runAutoStart();
-    renderBookHelp();
     renderSettingsButton();
     layout();
   }
@@ -1745,17 +1741,6 @@
     cancelTarget = null;
     show($("cancel-sheet"), false);
     if (tid) { removeTransfers([tid], false); }
-  }
-
-  /* -------------------------------------------------------- book help panel */
-  function renderBookHelp() {
-    var i, t, showBooks = false;
-    for (i = 0; i < S.transfers.length; i++) {
-      t = S.transfers[i];
-      if (t.for_me && /\.(epub|pdf)$/i.test(t.name) &&
-          (t.offer === "accepted" || t.status === "complete")) { showBooks = true; }
-    }
-    show($("books-panel"), showBooks && !isHost());
   }
 
   function renderSettingsButton() {
